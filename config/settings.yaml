@@ -1,0 +1,7 @@
+# 阶段一（只读）：写闸门关闭。开启前置见 README「写操作（未启用）」。
+write:
+  enabled: false
+
+scan:
+  interval_seconds: 300   # 低频轮询
+  cache_ttl_seconds: 300

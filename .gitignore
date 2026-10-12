@@ -1,0 +1,6 @@
+.venv/
+audit/
+logs/
+db/
+__pycache__/
+*.pyc
