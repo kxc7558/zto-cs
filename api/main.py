@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from service import problem_reader, rules, auto_reply, replier
 from shared import audit
 from shared import settings as cfg
+from shared.models import ParcelList as PParcelList
 from shared.config import DB_PATH
 
 _state: dict = {"reader": None, "cache": None, "cache_ts": None}
@@ -66,21 +67,34 @@ async def health():
     return {
         "ok": True,
         "ts": datetime.now().isoformat(timespec="seconds"),
-        "auto_reply_enabled": auto_reply.auto_reply_enabled(),
+        "auto_reply_enabled": auto_reply.get_mode() != "off",
+        "mode": auto_reply.get_mode(),
     }
 
 
 @app.get("/problem-parcels")
 async def list_problem_parcels(force: bool = False):
-    """拉「需要我回复的」问题件列表。带 5 分钟缓存（低频、反风控）。"""
+    """拉问题件列表（review HIGH-4：优先插件桥接缓存——插件上报的数据；
+    缓存为空/过期时兜底走 CDP reader）。带 5 分钟缓存。"""
     now = datetime.now().timestamp()
     cached = _state.get("cache")
     if cached is not None and not force and (now - (_state.get("cache_ts") or 0)) < 300:
         return cached
+    # 优先：插件桥接缓存（extension 部署的实时数据源）
+    from service.bridge_cache import get_latest_parcels
+    parcels = get_latest_parcels()
+    if parcels:
+        payload = json.loads(PParcelList(items=parcels, total=len(parcels),
+                             scanned_at=datetime.now()).model_dump_json())
+        _state["cache"] = payload
+        _state["cache_ts"] = now
+        return payload
+    # 兜底：CDP reader（需调试 Chrome 在 9222）
     try:
         result = await problem_reader.fetch_problem_list()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"browser read failed: {e}")
+        raise HTTPException(status_code=502,
+            detail="no data: extension not reporting and CDP reader unavailable (login the ZTO page first)")
     payload = json.loads(result.model_dump_json())
     _state["cache"] = payload
     _state["cache_ts"] = now
@@ -107,8 +121,10 @@ async def audit_log(month: str | None = None):
 
 @app.get("/auto-reply/status")
 async def auto_reply_status():
+    mode = auto_reply.get_mode()
     return {
-        "enabled": auto_reply.auto_reply_enabled(),
+        "enabled": mode != "off",
+        "mode": mode,
         "note": "敏感类（仲裁/理赔/责任/费用）永不自动，即使开关开着",
     }
 
@@ -119,9 +135,10 @@ class AutoReplyToggle(BaseModel):
 
 @app.post("/auto-reply/toggle")
 async def toggle_auto_reply(body: AutoReplyToggle):
-    """切换自动回复总开关（工作台页面调用）。落 settings.yaml，审计留痕。"""
-    conf = auto_reply.set_auto_reply(body.enabled)
-    return {"ok": True, "enabled": body.enabled, "config": conf.get("write")}
+    """切换自动回复（工作台页面调用）：false=off，true=semi。落 settings.yaml，审计留痕。"""
+    mode = "semi" if body.enabled else "off"
+    conf = auto_reply.set_mode(mode)
+    return {"ok": True, "enabled": conf["enabled"], "mode": conf["mode"]}
 
 
 @app.post("/auto-reply/run")
@@ -151,6 +168,13 @@ async def reply_prepare(body: ReplyPrepare):
     data = _state.get("cache")
     if data:
         parcel = next((i for i in data["items"] if i["problem_id"] == body.problem_id), None)
+    if parcel is None:
+        # 工作台/prepare 用缓存；无缓存时从 bridge 缓存兜底
+        from service.bridge_cache import get_latest_parcels
+        for pp in get_latest_parcels():
+            if pp.problem_id == body.problem_id:
+                parcel = pp.model_dump()
+                break
     if parcel is None:
         raise HTTPException(status_code=404, detail="problem not in latest scan — scan first")
     from service.gatekeeper import run_gates
@@ -264,10 +288,12 @@ async def bridge_config(x_bridge_token: str | None = Header(default=None)):
     from shared.config import SENSITIVE_KEYWORDS
     return {
         "mode": cfg.get("write.auto_reply.mode", "semi"),
+        "source_mode": cfg.get("write.source_mode", "extension"),
         "poll_interval_seconds": cfg.get("write.auto_reply.poll_interval_seconds", 60),
         "send_interval_seconds": cfg.get("write.auto_reply.send_interval_seconds", 45),
         "sensitive_keywords": SENSITIVE_KEYWORDS,
-        "enabled": auto_reply.auto_reply_enabled(),
+        "enabled": auto_reply.get_mode() != "off",
+        "mode": auto_reply.get_mode(),
     }
 
 

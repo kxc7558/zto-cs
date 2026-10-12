@@ -147,11 +147,14 @@ def apply_update(manifest: dict, payload: bytes) -> dict:
     zf = zipfile.ZipFile(io.BytesIO(payload))
     names = zf.namelist()
     # 全部文件必须过白名单 + 不许覆盖凭证/信任根
+    # 归一化后比对（review CRITICAL-2：config/./bridge_secret.key 会被字符串精确匹配漏掉）
+    never_norm = {str(Path(n).as_posix()) for n in NEVER_OVERWRITE}
     for n in names:
         if _safe_target(n) is None:
             audit.append("update_rejected", {"reason": f"path-not-whitelisted:{n}"}, actor="updater")
             return {"ok": False, "note": f"path not whitelisted: {n}"}
-        if n in NEVER_OVERWRITE:
+        norm = str(Path(n).as_posix())
+        if norm in never_norm or norm.replace("./", "") in never_norm:
             audit.append("update_rejected", {"reason": f"credential-overwrite:{n}"}, actor="updater")
             return {"ok": False, "note": f"cannot overwrite credential: {n}"}
 

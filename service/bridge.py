@@ -18,7 +18,6 @@ def _row_to_parcel(row: dict) -> ProblemParcel:
     ptype = row.get("问题件类型") or ""
     category = row.get("问题件一级类型") or ""
     created = row.get("创建时间") or ""
-    anchor_src = f"{row.get('运单号') or ''}|{ptype}|{created}|{desc[:40]}"
     return ProblemParcel(
         problem_id=_make_problem_id({
             "waybill_no": row.get("运单号"),
@@ -88,16 +87,19 @@ async def pending_tasks(limit: int = 5) -> dict:
     闸门走 gatekeeper.run_gates（模块化管线：开关/敏感/规则/AI审核）。
     数据源按 bridge_mode 装配（extension / cdp）。
     """
-    from service.auto_reply import auto_reply_enabled
+    from service.auto_reply import get_mode
     from service.gatekeeper import run_gates
     from service.registry import get_source
     from shared import settings as cfg
 
-    if not auto_reply_enabled():
+    if get_mode() == "off":
         return {"ok": True, "enabled": False, "tasks": []}
 
-    mode = cfg.get("write.auto_reply.mode", "extension")
-    source = get_source(mode)
+    # review HIGH-2：数据源选择（source_mode）与回复模式（semi/full）拆开，
+    # confirmed_by 用固定的 reply_mode（插件端用同一个值算幂等键，避免键漂移）
+    reply_mode = cfg.get("write.auto_reply.mode", "semi")
+    source_mode = cfg.get("write.source_mode", "extension")
+    source = get_source(source_mode)
     parcels = await source.fetch_parcels()
     switches = {"auto_enabled": True}
     tasks = []
@@ -111,7 +113,7 @@ async def pending_tasks(limit: int = 5) -> dict:
         # 同一 problem_id 不会重发——重试前必查账本）
         from db.ledger import make_idempotency_key, record_intent, get_status
         key = make_idempotency_key(p.problem_id, "reply", gate.reply_text,
-                                   confirmed_by=f"extension:{mode}")
+                                   confirmed_by=f"extension:{reply_mode}")
         existing = get_status(key)
         # 只跳过 committed / pending（review HIGH-4：pending=插件正在处理或已崩溃，
         # 重发会重复提交；unknown=结果不明，待对账，同样不能重发）
@@ -148,7 +150,14 @@ async def ingest_result(problem_id: str, reply_text: str, submitted: bool,
         ledger.record_intent(problem_id, None, "reply", reply_text, key,
                              auto=(mode == "full"), confirmed_by=confirmed_by)
 
-    # 判定标准：readback 匹配才算 committed（界面提示成功不算数）
+    # 判定标准（review HIGH-3：semi 模式插件填好等人工 ≠ failed）
+    if mode == "semi" and not submitted:
+        # semi：插件已把回复填进弹窗，等人工点提交——记 pending（不是 failed，
+        # 否则每轮重发重复填）。人工点提交后由工作台 /reply/commit 记 committed。
+        audit.append("bridge_reply_filled", {
+            "problem_id": problem_id, "mode": mode, "text_len": len(reply_text),
+        }, actor=confirmed_by)
+        return {"ok": True, "note": "filled-awaiting-human"}
     verified = bool(readback) and (reply_text[:12] in readback)
     if verified:
         ledger.record_result(key, "committed", platform_receipt=readback[:200])

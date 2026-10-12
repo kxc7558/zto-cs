@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>桥接配置</title>
+<style>body{font-family:"Microsoft YaHei",sans-serif;max-width:520px;margin:40px auto;padding:0 20px}
+label{display:block;margin:16px 0 6px;font-weight:600}input{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px}
+button{margin-top:16px;padding:8px 20px;background:#3370ff;color:#fff;border:none;border-radius:6px;cursor:pointer}
+.hint{color:#86909c;font-size:13px;margin-top:8px}#ok{color:#00b42a;margin-left:10px}</style></head>
+<body>
+<h2>中通客服智助 · 桥接配置</h2>
+<p class="hint">把服务端 config/bridge_secret.key 的值粘贴到这里（首次安装配置一次）。</p>
+<label>桥接密钥</label>
+<input type="password" id="token" placeholder="粘贴密钥">
+<button id="save">保存</button><span id="ok"></span>
+<p class="hint" id="fp"></p>
+<script src="options.js"></script>
+</body></html>

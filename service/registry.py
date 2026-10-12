@@ -1,10 +1,14 @@
-"""数据源与执行通道的注册与装配（工厂）。
+"""数据源注册与装配（工厂）。
 
-模块化设计：按配置 bridge_mode 选择实现，加新实现 = 注册一个类，管线零改动。
-  - extension：插件上报/插件填弹窗（当前，风控最低）
-  - cdp：Playwright 读取/提交（备胎，已实现但需专用调试 Chrome）
+模块化设计（review 后简化）：执行统一在插件侧（extension），
+服务端只做决策与记账。数据源按配置选择：
+  - extension：插件上报（bridge_cache，当前，风控最低）
+  - cdp：Playwright 读取（备胎，需专用调试 Chrome）
+
+旧版 CdpExecutor/ExtensionExecutor（直接调 replier.commit_reply 绕闸门）
+已删除（review CRITICAL-1）：写路径唯一 = gatekeeper.run_gates，执行在插件侧。
 """
-from service.ports import ProblemSource, ReplyExecutor
+from service.ports import ProblemSource
 
 
 class ExtensionSource:
@@ -24,33 +28,5 @@ class CdpSource:
         return listing.items
 
 
-class ExtensionExecutor:
-    """插件执行的通道：回复由 content script 在页面里填弹窗提交。
-
-    服务端只记账（结果由 /bridge/ingest/result 回传）。
-    """
-
-    async def execute(self, parcel, reply_text: str, mode: str) -> dict:
-        # 插件桥接形态下，执行发生在浏览器里；这里不直接执行。
-        # 任务下发见 /bridge/tasks/pending，结果回传见 ingest_result。
-        raise NotImplementedError("extension executor runs in-browser via bridge endpoints")
-
-
-class CdpExecutor:
-    """Playwright 提交的通道（备胎）。"""
-
-    async def execute(self, parcel, reply_text: str, mode: str) -> dict:
-        from service.replier import commit_reply
-        return await commit_reply(
-            problem_id=parcel.problem_id, waybill_no=parcel.waybill_no,
-            reply_text=reply_text, confirmed_by="cdp", auto=(mode == "full"),
-            desc_hint=(parcel.description or "")[:20],
-        )
-
-
 def get_source(mode: str) -> ProblemSource:
     return ExtensionSource() if mode == "extension" else CdpSource()
-
-
-def get_executor(mode: str) -> ReplyExecutor:
-    return ExtensionExecutor() if mode == "extension" else CdpExecutor()

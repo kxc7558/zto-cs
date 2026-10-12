@@ -3,8 +3,19 @@
 
 const API = "http://127.0.0.1:8765";
 
-async function api(path, options) {
-  const r = await fetch(API + path, options);
+// 桥接密钥：首次安装时从 options 页粘贴（存 chrome.storage.local），
+// 每次请求附 X-Bridge-Token（review HIGH-1：插件端从未发 token 导致全部 401）。
+async function getToken() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["bridgeToken"], (r) => resolve(r.bridgeToken || ""));
+  });
+}
+
+async function api(path, options = {}) {
+  const token = await getToken();
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (token) headers["X-Bridge-Token"] = token;
+  const r = await fetch(API + path, { ...options, headers });
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
   return r.json();
 }

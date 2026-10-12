@@ -69,4 +69,8 @@ def verify(month: str | None = None) -> dict:
             return {"ok": False, "records": n, "broken_at": n, "month": d.name}
         prev = rec["hash"]
         n += 1
+    # 链尾 sentinel 交叉校验（review LOW：截断/删月要能验出）
+    sentinel = d / ".chain_tail"
+    if sentinel.exists() and sentinel.read_text(encoding="utf-8").strip() != prev:
+        return {"ok": False, "records": n, "month": d.name, "note": "chain truncated vs sentinel"}
     return {"ok": True, "records": n, "month": d.name}

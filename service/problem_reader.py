@@ -25,11 +25,6 @@ def _make_problem_id(row: dict) -> str:
     return uuid.uuid5(uuid.NAMESPACE_URL, raw).hex[:16]
 
 
-def _sensitive(desc: str) -> bool:
-    from shared.config import SENSITIVE_KEYWORDS
-    return any(k in (desc or "") for k in SENSITIVE_KEYWORDS)
-
-
 async def fetch_problem_list() -> ParcelList:
     """拉「需要我回复的」列表（阶段一只读）。
 
@@ -111,7 +106,8 @@ async def fetch_problem_list() -> ParcelList:
                 "province": col(cells, "派件省区"),
             }
             row["problem_id"] = _make_problem_id(row)
-            row["needs_human"] = _sensitive(row.get("description", ""))
+            from service.rules import is_sensitive
+            row["needs_human"] = is_sensitive("", row.get("description", ""))
             items.append(ProblemParcel(**row))
         result = ParcelList(
             total=len(items), scanned_at=datetime.now(), items=items
