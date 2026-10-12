@@ -22,7 +22,27 @@ _state: dict = {"reader": None, "cache": None, "cache_ts": None}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _state["reader"] = problem_reader
+    # 远程更新轮询（后台任务，10 分钟一次；服务器不可达静默跳过）
+    import asyncio
+
+    async def update_poller():
+        from service.updater import poll_and_apply
+        while True:
+            await asyncio.sleep(600)
+            try:
+                r = poll_and_apply()
+                if r.get("ok") and r.get("needs_restart"):
+                    # 冷更需要重启——落审计，运维侧告警（人工重启）
+                    from shared import audit as _a
+                    _a.append("update_needs_restart", r, actor="updater")
+            except Exception:
+                pass
+
+    _state["update_task"] = asyncio.create_task(update_poller())
     yield
+    task = _state.get("update_task")
+    if task:
+        task.cancel()
 
 
 app = FastAPI(title="ZTO 客服智助 · 问题件回复闭环", lifespan=lifespan)

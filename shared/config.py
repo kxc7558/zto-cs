@@ -15,6 +15,9 @@ SCAN_INTERVAL_SECONDS = 300          # 低频轮询：5 分钟
 REQUEST_DELAY_SECONDS = (2, 6)       # 请求间随机延迟区间
 SENSITIVE_KEYWORDS = ["仲裁", "理赔", "罚款", "责任", "费用", "申诉"]  # 转人工关键词
 
+# 远程更新（家庭服务器）：装的时候可改成局域网地址或 Tailscale 地址
+UPDATE_SERVER_URL = "http://100.104.230.47:8900"  # homeserver (Tailscale)
+
 # 数据抽屉（硬偏好：分类抽屉，避免堆积）
 AUDIT_DIR = ROOT / "audit"           # 审计按 YYYY-MM 分屉
 LOG_DIR = ROOT / "logs"              # 日志按月轮转
