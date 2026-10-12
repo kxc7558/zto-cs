@@ -18,6 +18,12 @@ SENSITIVE_KEYWORDS = ["仲裁", "理赔", "罚款", "责任", "费用", "申诉"
 # 远程更新（家庭服务器）：装的时候可改成局域网地址或 Tailscale 地址
 UPDATE_SERVER_URL = "http://100.104.230.47:8900"  # homeserver (Tailscale)
 
+# AI 审核模型（本机，机密数据不出边界）
+# LLM_BASE_URL：OpenAI 格式网关（如 key-pool）；留空则用 LOCAL_RELAY_URL（Anthropic 格式中转站）
+LLM_BASE_URL = ""            # 例：http://127.0.0.1:8787/v1
+LLM_MODEL = "claude-sonnet-5"
+LOCAL_RELAY_URL = "http://127.0.0.1:15721"  # 本机中转站（Anthropic 格式）
+
 # 数据抽屉（硬偏好：分类抽屉，避免堆积）
 AUDIT_DIR = ROOT / "audit"           # 审计按 YYYY-MM 分屉
 LOG_DIR = ROOT / "logs"              # 日志按月轮转

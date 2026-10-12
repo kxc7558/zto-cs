@@ -17,22 +17,11 @@ async def review_reply(ptype: str, description: str, reply_text: str,
     """审一条自动回复。返回 {verdict: pass|human, reason: str}。
 
     fail-safe：任何异常 → 转人工。
+    模型边界：只走本机中转（127.0.0.1），机密业务数据不出边界。
     """
     try:
-        from shared.config import LLM_BASE_URL, LLM_MODEL
         prompt = _build_prompt(ptype, description, reply_text, outlet_from, outlet_notify)
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{LLM_BASE_URL}/chat/completions",
-                json={
-                    "model": LLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0,
-                    "max_tokens": 200,
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
+        content = await _call_local_model(prompt)
         verdict = _parse_verdict(content)
         audit.append("ai_review", {
             "ptype": ptype, "verdict": verdict["verdict"], "reason": verdict["reason"][:80],
@@ -41,6 +30,37 @@ async def review_reply(ptype: str, description: str, reply_text: str,
     except Exception as e:
         audit.append("ai_review_error", {"error": str(e)[:120]}, actor="ai-reviewer")
         return {"verdict": "human", "reason": f"reviewer-unavailable:{type(e).__name__}"}
+
+
+async def _call_local_model(prompt: str) -> str:
+    """调本机模型：支持 OpenAI 格式（LLM_BASE_URL）与 Anthropic 格式（本机中转站）。"""
+    from shared.config import LLM_BASE_URL, LLM_MODEL
+
+    if LLM_BASE_URL:
+        # OpenAI 格式（key-pool 网关等）
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                json={"model": LLM_MODEL,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0, "max_tokens": 200})
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+
+    # Anthropic 格式（本机中转站 15721，机密数据不出边界）
+    # max_tokens 2000：思考模型（deepseek 等）的思考 token 也计入，200 会全吃掉致 content 空
+    from shared.config import LOCAL_RELAY_URL
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{LOCAL_RELAY_URL}/v1/messages",
+            json={"model": LLM_MODEL, "max_tokens": 2000,
+                  "messages": [{"role": "user", "content": prompt}]},
+            headers={"anthropic-version": "2023-06-01"})
+        resp.raise_for_status()
+        content = resp.json().get("content", [])
+        if not content:
+            raise ValueError("empty content (thinking model ate max_tokens?)")
+        return content[0]["text"]
 
 
 def _build_prompt(ptype: str, description: str, reply_text: str,
@@ -78,11 +98,22 @@ def _parse_verdict(content: str) -> dict:
 
 
 class AiReviewer:
-    """ports.AiReviewer 的实现：与 Protocol 签名对齐（parcel, reply_text）。"""
+    """ports.AiReviewer 的实现。
+
+    同时提供两种签名：review(parcel, reply_text)（Protocol）
+    和 review_reply(**kw)（gatekeeper 调用形态），同一实现。
+    """
 
     async def review(self, parcel, reply_text: str) -> dict:
-        return await review_reply(
+        return await self.review_reply(
             ptype=parcel.ptype or "", description=parcel.description or "",
             reply_text=reply_text, outlet_from=parcel.outlet_from or "",
             outlet_notify=parcel.outlet_notify or "",
+        )
+
+    async def review_reply(self, ptype: str, description: str, reply_text: str,
+                           outlet_from: str = "", outlet_notify: str = "") -> dict:
+        return await review_reply(
+            ptype=ptype, description=description, reply_text=reply_text,
+            outlet_from=outlet_from, outlet_notify=outlet_notify,
         )

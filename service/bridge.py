@@ -121,7 +121,7 @@ async def pending_tasks(limit: int = 5) -> dict:
             continue
         if not existing:
             record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
-                          key, auto=(mode == "full"), confirmed_by=f"extension:{mode}")
+                          key, auto=(reply_mode == "full"), confirmed_by=f"extension:{reply_mode}")
         tasks.append({
             "problem_id": p.problem_id,
             "waybill_no": p.waybill_no,
