@@ -27,13 +27,20 @@ def is_sensitive(ptype: str, description: str) -> bool:
 
 
 def match_template(ptype: str, category: str) -> str | None:
-    """按问题件类型匹配模板；类型没配则回退一级类型；都没有返回 None（转人工）。"""
+    """按问题件类型匹配模板；类型没配则回退一级类型。
+
+    安全语义：未配置的类型返回 None（转人工）——未知类型绝不自动回复。
+    uncategorized 兜底只用于"类型确实是『未分类』"的问题件（列表里有一级类型
+    但细类型为空的行），不作为任意未知类型的放行通道。
+    """
     tpl = load_templates()
     for key in (ptype, category):
         if key and key in tpl and tpl[key]:
             return tpl[key][0]
-    # 未配置类型的兜底：uncategorized
-    return (tpl.get("uncategorized") or [None])[0]
+    # 只有当类型本身就是"未分类/空"时才用兜底；未知的具体类型 → None（转人工）
+    if (not ptype or ptype == "未分类") and "uncategorized" in tpl:
+        return tpl["uncategorized"][0]
+    return None
 
 
 def validate_reply(text: str) -> tuple[bool, str]:
