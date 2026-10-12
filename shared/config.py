@@ -13,7 +13,7 @@ WS_HOST = "https://ws.zto56.com"
 # 反风控基线（§15 / 设计 §4）
 SCAN_INTERVAL_SECONDS = 300          # 低频轮询：5 分钟
 REQUEST_DELAY_SECONDS = (2, 6)       # 请求间随机延迟区间
-SENitive_KEYWORDS = ["仲裁", "理赔", "罚款", "责任", "费用", "申诉"]  # 转人工关键词
+SENSITIVE_KEYWORDS = ["仲裁", "理赔", "罚款", "责任", "费用", "申诉"]  # 转人工关键词
 
 # 数据抽屉（硬偏好：分类抽屉，避免堆积）
 AUDIT_DIR = ROOT / "audit"           # 审计按 YYYY-MM 分屉

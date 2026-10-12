@@ -16,6 +16,7 @@ from playwright.async_api import async_playwright
 from shared import audit
 from shared.config import CDP_WS_URL, PROBLEM_QUERY_URL, WS_HOST
 from shared.models import ParcelList, ProblemParcel
+from service.browser import BrowserSession
 
 
 class BrowserSession:
@@ -72,8 +73,8 @@ def _make_problem_id(row: dict) -> str:
 
 
 def _sensitive(desc: str) -> bool:
-    from shared.config import SENitive_KEYWORDS
-    return any(k in (desc or "") for k in SENitive_KEYWORDS)
+    from shared.config import SENSITIVE_KEYWORDS
+    return any(k in (desc or "") for k in SENSITIVE_KEYWORDS)
 
 
 async def fetch_problem_list() -> ParcelList:

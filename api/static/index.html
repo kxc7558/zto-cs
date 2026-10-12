@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>问题件助手</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --line:#e8eaed; --text:#1f2329; --sub:#86909c;
+          --blue:#3370ff; --green:#00b42a; --orange:#ff7d00; --red:#f53f3f; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:16px 28px;
+           display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:20px; font-weight:600; }
+  header .sub { font-size:13px; color:var(--sub); }
+  .auto-box { margin-left:auto; display:flex; align-items:center; gap:12px;
+              background:#f2f3f5; padding:8px 16px; border-radius:20px; }
+  .auto-box .label { font-size:14px; }
+  .switch { position:relative; width:46px; height:26px; background:#c9cdd4; border-radius:13px;
+            cursor:pointer; transition:.2s; }
+  .switch.on { background:var(--green); }
+  .switch::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px;
+                   background:#fff; border-radius:50%; transition:.2s; }
+  .switch.on::after { left:23px; }
+  .mode-tag { font-size:12px; padding:3px 10px; border-radius:10px; }
+  .mode-tag.semi { background:#fff7e8; color:var(--orange); }
+  .mode-tag.full { background:#ffece8; color:var(--red); }
+  main { max-width:1100px; margin:24px auto; padding:0 28px; }
+  .stats { display:flex; gap:16px; margin-bottom:20px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:18px 24px; flex:1; }
+  .stat .num { font-size:32px; font-weight:700; }
+  .stat .label { font-size:13px; color:var(--sub); margin-top:4px; }
+  .stat.urgent .num { color:var(--red); }
+  .stat.done .num { color:var(--green); }
+  .section-title { font-size:16px; font-weight:600; margin:24px 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { padding:12px 16px; text-align:left; border-bottom:1px solid var(--line); }
+  th { background:#fafbfc; color:var(--sub); font-weight:500; white-space:nowrap; }
+  td.desc { max-width:320px; }
+  .tag { font-size:12px; padding:3px 10px; border-radius:6px; white-space:nowrap; }
+  .tag.red { background:#ffece8; color:var(--red); }
+  .tag.green { background:#e8ffea; color:var(--green); }
+  .tag.orange { background:#fff7e8; color:var(--orange); }
+  .tag.blue { background:#e8f3ff; color:var(--blue); }
+  .empty { padding:48px; text-align:center; color:var(--sub); }
+  .empty .big { font-size:40px; margin-bottom:8px; }
+  button.btn { border:1px solid var(--line); background:var(--card); padding:8px 16px;
+               border-radius:8px; cursor:pointer; font-size:14px; }
+  button.btn.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+  button.btn:disabled { opacity:.5; cursor:not-allowed; }
+  dialog { border:none; border-radius:16px; padding:28px; width:560px; box-shadow:0 12px 48px rgba(0,0,0,.18); }
+  dialog::backdrop { background:rgba(0,0,0,.4); }
+  dialog h3 { font-size:18px; margin-bottom:8px; }
+  .meta { font-size:14px; color:var(--sub); margin-bottom:16px; line-height:1.8; }
+  textarea { width:100%; height:100px; border:1px solid var(--line); border-radius:10px;
+             padding:12px; font-size:14px; font-family:inherit; resize:vertical; }
+  .notice { background:#fff7e8; border:1px solid #ffe4a0; color:#8f4a00; font-size:13px;
+            padding:10px 14px; border-radius:8px; margin:12px 0; line-height:1.6; }
+  .actions { display:flex; gap:12px; justify-content:flex-end; margin-top:18px; }
+  .hint { font-size:12px; color:var(--sub); margin-top:8px; }
+  #toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); background:#1f2329;
+           color:#fff; padding:12px 24px; border-radius:10px; font-size:14px; opacity:0; transition:.3s; }
+  #toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>问题件助手</h1>
+    <div class="sub">中通快运 · 自动帮您盯问题件、准备回复</div>
+  </div>
+  <div class="auto-box">
+    <span class="label">自动回复</span>
+    <div class="switch" id="autoSwitch" onclick="toggleAuto()"></div>
+    <span class="mode-tag semi" id="modeTag">半自动（填好等您确认）</span>
+  </div>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat urgent">
+      <div class="num" id="statWait">–</div>
+      <div class="label">等待回复</div>
+    </div>
+    <div class="stat">
+      <div class="num" id="statAuto">–</div>
+      <div class="label">可自动回复（已通过审核）</div>
+    </div>
+    <div class="stat">
+      <div class="num" id="statHuman">–</div>
+      <div class="label">需要您亲自处理</div>
+    </div>
+    <div class="stat done">
+      <div class="num" id="statDone">–</div>
+      <div class="label">已回复</div>
+    </div>
+  </div>
+
+  <div class="section-title">问题件列表 <span style="font-size:12px;color:var(--sub);font-weight:400">（来自中通系统 · 每 5 分钟自动刷新）</span></div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>类型</th><th class="desc">问题描述</th><th>发布网点</th><th>通知网点</th>
+            <th>回复情况</th><th>状态</th></tr>
+      </thead>
+      <tbody id="rows"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="hint">· 红色「敏感件」涉及责任判定，系统不会自动回复，需要您在客服日常里亲自处理<br>
+  · 开启自动回复后，系统把回复填好，<b>您确认后才发出</b>（半自动）</div>
+</main>
+
+<dialog id="replyDlg">
+  <h3>回复这条问题件</h3>
+  <div class="meta" id="dlgMeta"></div>
+  <textarea id="dlgText" placeholder="输入回复内容…"></textarea>
+  <div class="notice">点「确认发出」后，回复会立即写入中通系统，请先核对内容。</div>
+  <div class="actions">
+    <button class="btn" onclick="dlg.close()">取消</button>
+    <button class="btn primary" id="dlgCommit" onclick="commitReply()">确认发出</button>
+  </div>
+</dialog>
+
+<div id="toast"></div>
+<script>
+const API = location.origin;
+const dlg = document.getElementById('replyDlg');
+let current = null;
+
+function esc(s) { return (s||'').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+async function refreshAuto() {
+  const s = await (await fetch(API + '/auto-reply/status')).json();
+  const mode = (await (await fetch(API + '/bridge/config')).json()).mode || 'semi';
+  document.getElementById('autoSwitch').classList.toggle('on', s.enabled);
+  const tag = document.getElementById('modeTag');
+  tag.textContent = mode === 'full' ? '全自动（自动发出）' : '半自动（填好等您确认）';
+  tag.className = 'mode-tag ' + mode;
+}
+
+async function toggleAuto() {
+  const s = await (await fetch(API + '/auto-reply/status')).json();
+  const next = !s.enabled;
+  const r = await (await fetch(API + '/auto-reply/toggle', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({enabled: next})
+  })).json();
+  if (r.ok) {
+    toast(next ? '已开启：系统把回复填好，您确认后发出' : '已关闭');
+    refreshAuto();
+  }
+}
+
+async function loadList(force) {
+  const tb = document.getElementById('rows');
+  tb.innerHTML = '<tr><td colspan="6" class="empty">加载中…</td></tr>';
+  try {
+    const data = await (await fetch(API + '/problem-parcels' + (force ? '?force=true' : ''))).json();
+    const items = data.items || [];
+    const wait = items.filter(i => !i.latest_reply && i.needs_human).length;
+    const autoN = items.filter(i => !i.latest_reply && !i.needs_human).length;
+    const humanN = items.filter(i => !i.latest_reply && i.needs_human).length;
+    const doneN = items.filter(i => i.latest_reply).length;
+    document.getElementById('statWait').textContent = wait + autoN;
+    document.getElementById('statAuto').textContent = autoN;
+    document.getElementById('statHuman').textContent = humanN;
+    document.getElementById('statDone').textContent = doneN;
+    if (!items.length) {
+      tb.innerHTML = '<tr><td colspan="6" class="empty"><div class="big">✓</div>暂无需要处理的问题件</td></tr>';
+      return;
+    }
+    // 未回复的排前面，敏感的再排前面
+    items.sort((a,b) => {
+      const ka = (a.latest_reply?2:0) + (a.needs_human?0:1);
+      const kb = (b.latest_reply?2:0) + (b.needs_human?0:1);
+      return ka - kb;
+    });
+    tb.innerHTML = items.slice(0, 30).map(it => {
+      let status = '';
+      if (it.needs_human && !it.latest_reply) status = '<span class="tag red">敏感件 · 请亲自处理</span>';
+      else if (it.latest_reply) status = '<span class="tag green">已回复</span>';
+      else status = '<span class="tag blue">待回复</span>';
+      return `<tr>
+        <td><b>${esc(it.ptype)}</b><br><span style="font-size:12px;color:var(--sub)">${esc(it.category)}</span></td>
+        <td class="desc" title="${esc(it.description)}">${esc((it.description||'').slice(0,70))}</td>
+        <td>${esc(it.outlet_from)}</td>
+        <td>${esc(it.outlet_notify)}</td>
+        <td>${esc((it.latest_reply||'—').slice(0,30))}</td>
+        <td>${status}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tb.innerHTML = `<tr><td colspan="6" class="empty">加载失败：${esc(e.message)}<br>请确认中通网页已登录、服务已启动</td></tr>`;
+  }
+}
+
+setInterval(() => loadList(false), 300000); // 5 分钟自动刷新
+refreshAuto();
+loadList(false);
+</script>
+</body>
+</html>
