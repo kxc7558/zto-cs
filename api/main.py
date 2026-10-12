@@ -27,22 +27,26 @@ async def lifespan(app: FastAPI):
 
     async def update_poller():
         from service.updater import poll_and_apply
+        from shared import audit as _a
         while True:
             await asyncio.sleep(600)
             try:
-                r = poll_and_apply()
+                # poll_and_apply 是同步的（httpx.get）——放线程池防阻塞事件循环
+                r = await asyncio.to_thread(poll_and_apply)
                 if r.get("ok") and r.get("needs_restart"):
-                    # 冷更需要重启——落审计，运维侧告警（人工重启）
-                    from shared import audit as _a
                     _a.append("update_needs_restart", r, actor="updater")
-            except Exception:
-                pass
+            except Exception as e:
+                _a.append("update_poll_error", {"error": str(e)[:120]}, actor="updater")
 
     _state["update_task"] = asyncio.create_task(update_poller())
     yield
     task = _state.get("update_task")
     if task:
         task.cancel()
+        try:
+            await task  # review MEDIUM-7：cancel 要 await
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="ZTO 客服智助 · 问题件回复闭环", lifespan=lifespan)

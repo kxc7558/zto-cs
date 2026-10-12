@@ -37,18 +37,40 @@ def _secret() -> str:
 
 
 def _verify_machine(headers) -> bool:
-    """校验客户端机器令牌：HMAC(machine_id, secret)。"""
+    """校验客户端机器令牌：HMAC(machine_id:timestamp, secret) + 时间窗（防重放）。"""
     mid = headers.get("X-Machine-Id", "")
+    ts = headers.get("X-Machine-Timestamp", "")
     sig = headers.get("X-Machine-Signature", "")
-    if not mid or not sig:
+    if not mid or not ts or not sig:
         return False
-    expect = hmac.new(_secret().encode(), mid.encode(), hashlib.sha256).hexdigest()
+    # 时间窗 ±5 分钟（review HIGH-6：无时间戳可无限重放）
+    import time as _time
+    try:
+        if abs(_time.time() - int(ts)) > 300:
+            return False
+    except ValueError:
+        return False
+    expect = hmac.new(_secret().encode(), f"{mid}:{ts}".encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(sig, expect)
 
 
 def _verify_publish(headers) -> bool:
     key = headers.get("X-Publish-Key", "")
     return bool(key) and hmac.compare_digest(key, PUBLISH_KEY_PATH.read_text(encoding="utf-8").strip())
+
+
+def _path_whitelisted(rel: str) -> bool:
+    """路径感知白名单（review MEDIUM-8：字符串前缀会被 config/../service/x 绕过）。"""
+    parts = Path(rel).parts
+    if not parts:
+        return False
+    top = parts[0]
+    if top not in ("config", "service", "shared", "extension", "api"):
+        return False
+    # 禁路径遍历、绝对路径、盘符
+    if ".." in parts or rel.startswith(("/", "\\")) or ":" in rel:
+        return False
+    return True
 
 
 def _publish_bundle(files: dict) -> bytes:
@@ -100,30 +122,36 @@ class Handler(BaseHTTPRequestHandler):
             if not _verify_publish(self.headers):
                 self._json(401, {"error": "publish auth failed"})
                 return
+            import base64
             length = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(length).decode("utf-8"))
             version = req.get("version", "")
-            files = req.get("files", {})
-            if not version or not files:
-                self._json(400, {"error": "version and files required"})
+            payload_b64 = req.get("payload_b64", "")
+            sig_hex = req.get("signature", "")
+            if not version or not payload_b64 or not sig_hex:
+                self._json(400, {"error": "version, payload_b64, signature required"})
                 return
-            for rel in files:
-                if not rel.startswith(WHITELIST_PREFIX):
-                    self._json(400, {"error": f"path not whitelisted: {rel}"})
+            payload = base64.b64decode(payload_b64)
+            # 白名单校验（客户端也验，双重）
+            import zipfile as _zf
+            for n in _zf.ZipFile(io.BytesIO(payload)).namelist():
+                if not _path_whitelisted(n):
+                    self._json(400, {"error": f"path not whitelisted: {n}"})
                     return
-            payload = _publish_bundle(files)
-            integrity = hashlib.sha256(payload).hexdigest()
+            sha_hex = hashlib.sha256(payload).hexdigest()
             pkg = VERSIONS / f"{version}.zip"
             pkg.write_bytes(payload)
             (VERSIONS / "latest.json").write_text(json.dumps({
                 "version": version,
-                "integrity": integrity,
-                "files": list(files.keys()),
+                "signature": sig_hex,
+                "sha256": sha_hex,
                 "published_at": datetime.now().isoformat(timespec="seconds"),
             }, ensure_ascii=False), encoding="utf-8")
-            # 登记客户端机器
-            self._json(200, {"ok": True, "version": version, "integrity": integrity[:16]})
+            self._json(200, {"ok": True, "version": version, "sha256": sha_hex[:16]})
         elif self.path == "/register":
+            if not _verify_publish(self.headers):
+                self._json(401, {"error": "register requires publish key"})
+                return
             length = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(length).decode("utf-8"))
             mid = req.get("machine_id", "")

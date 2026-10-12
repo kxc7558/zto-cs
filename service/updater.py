@@ -37,6 +37,10 @@ WHITELIST = {
     "api": ROOT / "api",
 }
 
+# 更新包绝不覆盖的文件（凭证/身份——review HIGH-5）
+NEVER_OVERWRITE = {"config/bridge_secret.key", "config/machine_id", "config/VERSION",
+                   "shared/update_pubkey.py"}  # 信任根不能被更新包替换
+
 HOT_RELOAD_DIRS = {"config"}  # 热更（不重启）
 MACHINE_ID_PATH = ROOT / "config" / "machine_id"
 
@@ -55,11 +59,12 @@ def _update_server() -> str:
 
 
 def _auth_headers() -> dict:
-    """每机独立令牌：HMAC(machine_id, bridge_secret)——服务器可验。"""
+    """每机独立令牌：HMAC(machine_id, bridge_secret) + 时间戳（防重放）。"""
     key = bridge_auth.load_or_create()
     mid = machine_id()
-    sig = hmac.new(key.encode(), mid.encode(), hashlib.sha256).hexdigest()
-    return {"X-Machine-Id": mid, "X-Machine-Signature": sig}
+    ts = str(int(time.time()))
+    sig = hmac.new(key.encode(), f"{mid}:{ts}".encode(), hashlib.sha256).hexdigest()
+    return {"X-Machine-Id": mid, "X-Machine-Timestamp": ts, "X-Machine-Signature": sig}
 
 
 def _safe_target(rel_path: str) -> Path | None:
@@ -86,10 +91,27 @@ def check_version() -> dict | None:
 
 
 def verify_signature(manifest: dict, payload: bytes) -> bool:
-    """验更新包签名：SHA256(manifest.files) 必须与 manifest.integrity 一致。"""
-    expected = manifest.get("integrity", "")
-    actual = hashlib.sha256(payload).hexdigest()
-    return expected == actual
+    """验更新包 Ed25519 签名（客户端持开发者公钥，HTTP 明文不影响安全性）。
+
+    修复 review CRITICAL-2：裸 SHA256 是校验和不是签名——MITM 可同时替换
+    manifest 和 payload。现在必须公钥验签 + sha256 双重校验，改一字节必失败。
+    """
+    from shared.update_pubkey import ED25519_PUBKEY
+    from nacl.signing import VerifyKey
+    from nacl.encoding import HexEncoder
+    from nacl.exceptions import BadSignatureError
+    sig_hex = manifest.get("signature", "")
+    sha_hex = manifest.get("sha256", "")
+    if not sig_hex or not sha_hex:
+        return False
+    # 双重校验：先 sha256（快速失败），再 Ed25519（真签名）
+    if hashlib.sha256(payload).hexdigest() != sha_hex:
+        return False
+    try:
+        VerifyKey(ED25519_PUBKEY, encoder=HexEncoder).verify(payload, bytes.fromhex(sig_hex))
+        return True
+    except (BadSignatureError, ValueError):
+        return False
 
 
 def backup_current(version: str, files: list[str]) -> Path:
@@ -124,11 +146,14 @@ def apply_update(manifest: dict, payload: bytes) -> dict:
 
     zf = zipfile.ZipFile(io.BytesIO(payload))
     names = zf.namelist()
-    # 全部文件必须过白名单
+    # 全部文件必须过白名单 + 不许覆盖凭证/信任根
     for n in names:
         if _safe_target(n) is None:
             audit.append("update_rejected", {"reason": f"path-not-whitelisted:{n}"}, actor="updater")
             return {"ok": False, "note": f"path not whitelisted: {n}"}
+        if n in NEVER_OVERWRITE:
+            audit.append("update_rejected", {"reason": f"credential-overwrite:{n}"}, actor="updater")
+            return {"ok": False, "note": f"cannot overwrite credential: {n}"}
 
     version = manifest.get("version", "unknown")
     bak = backup_current(version, names)
@@ -147,13 +172,15 @@ def apply_update(manifest: dict, payload: bytes) -> dict:
         "version": version, "files": names, "backup": str(bak.name),
         "hot": hot_only,
     }, actor="updater")
+    # 写版本戳（review HIGH-3：否则 poll_and_apply 无限重装同一版本）
+    _VERSION_PATH.write_text(version, encoding="utf-8")
     return {"ok": True, "version": version, "hot": hot_only,
             "backup": str(bak), "needs_restart": not hot_only}
 
 
 def rollback(version: str | None = None) -> dict:
-    """回滚到最近一次备份（或指定版本）。"""
-    candidates = sorted(BAK_DIR.iterdir(), reverse=True)
+    """回滚到最近一次备份（或指定版本）。按目录内的时间戳排序（版本号字典序不可靠）。"""
+    candidates = sorted(BAK_DIR.iterdir(), key=lambda b: b.name.split("-", 1)[-1], reverse=True)
     if version:
         candidates = [b for b in candidates if b.name.startswith(version)]
     if not candidates:
@@ -162,6 +189,8 @@ def rollback(version: str | None = None) -> dict:
     manifest = json.loads((bak / "manifest.json").read_text(encoding="utf-8"))
     restored = []
     for rel in manifest["files"]:
+        if rel in NEVER_OVERWRITE:
+            continue  # 凭证/信任根不随回滚恢复
         src = bak / rel
         dst = _safe_target(rel)
         if src.exists() and dst:

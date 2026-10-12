@@ -113,8 +113,10 @@ async def pending_tasks(limit: int = 5) -> dict:
         key = make_idempotency_key(p.problem_id, "reply", gate.reply_text,
                                    confirmed_by=f"extension:{mode}")
         existing = get_status(key)
-        if existing and existing["status"] == "committed":
-            continue  # 已提交过，跳过（防重复下发）
+        # 只跳过 committed / pending（review HIGH-4：pending=插件正在处理或已崩溃，
+        # 重发会重复提交；unknown=结果不明，待对账，同样不能重发）
+        if existing and existing["status"] in ("committed", "pending", "unknown"):
+            continue
         if not existing:
             record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
                           key, auto=(mode == "full"), confirmed_by=f"extension:{mode}")
