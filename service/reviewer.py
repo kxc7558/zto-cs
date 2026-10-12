@@ -75,3 +75,14 @@ def _parse_verdict(content: str) -> dict:
         return {"verdict": "human", "reason": data.get("reason", "ai-said-human")}
     except Exception:
         return {"verdict": "human", "reason": "unparseable-review-output"}
+
+
+class AiReviewer:
+    """ports.AiReviewer 的实现：与 Protocol 签名对齐（parcel, reply_text）。"""
+
+    async def review(self, parcel, reply_text: str) -> dict:
+        return await review_reply(
+            ptype=parcel.ptype or "", description=parcel.description or "",
+            reply_text=reply_text, outlet_from=parcel.outlet_from or "",
+            outlet_notify=parcel.outlet_notify or "",
+        )

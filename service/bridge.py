@@ -7,7 +7,7 @@ from datetime import datetime
 
 from shared import audit
 from shared.models import ProblemParcel
-from service import rules, reviewer
+from service import rules
 from service.problem_reader import _make_problem_id
 from db import ledger
 
@@ -107,6 +107,17 @@ async def pending_tasks(limit: int = 5) -> dict:
         gate = await run_gates(p, switches)
         if not gate.passed:
             continue
+        # 下发前先落「意图」账本（防重复提交窗口：插件崩溃没回传时，
+        # 同一 problem_id 不会重发——重试前必查账本）
+        from db.ledger import make_idempotency_key, record_intent, get_status
+        key = make_idempotency_key(p.problem_id, "reply", gate.reply_text,
+                                   confirmed_by=f"extension:{mode}")
+        existing = get_status(key)
+        if existing and existing["status"] == "committed":
+            continue  # 已提交过，跳过（防重复下发）
+        if not existing:
+            record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
+                          key, auto=(mode == "full"), confirmed_by=f"extension:{mode}")
         tasks.append({
             "problem_id": p.problem_id,
             "waybill_no": p.waybill_no,
@@ -120,7 +131,12 @@ async def pending_tasks(limit: int = 5) -> dict:
 
 async def ingest_result(problem_id: str, reply_text: str, submitted: bool,
                         readback: str, mode: str, error: str | None) -> dict:
-    """插件回传结果 → 落账本、审计。"""
+    """插件回传结果 → 落账本、审计。
+
+    **服务端不信插件的 submitted 旗子**：以「readback 里有刚提交的文本」为准
+    （插件须回传真实回读结果，见 content/main.js 的回读逻辑）。
+    submitted=True 但 readback 为空/不匹配 → 记 unknown（不判已提交），待对账。
+    """
     confirmed_by = f"extension:{mode}"
     key = ledger.make_idempotency_key(problem_id, "reply", reply_text, confirmed_by)
     existing = ledger.get_status(key)
@@ -129,13 +145,24 @@ async def ingest_result(problem_id: str, reply_text: str, submitted: bool,
     if not existing:
         ledger.record_intent(problem_id, None, "reply", reply_text, key,
                              auto=(mode == "full"), confirmed_by=confirmed_by)
-    if submitted:
-        ledger.record_result(key, "committed", platform_receipt=(readback or "")[:200])
+
+    # 判定标准：readback 匹配才算 committed（界面提示成功不算数）
+    verified = bool(readback) and (reply_text[:12] in readback)
+    if verified:
+        ledger.record_result(key, "committed", platform_receipt=readback[:200])
         audit.append("bridge_reply_committed", {
             "problem_id": problem_id, "mode": mode, "text_len": len(reply_text),
-            "readback": (readback or "")[:120],
+            "readback": readback[:120], "verified": True,
         }, actor=confirmed_by)
-        return {"ok": True, "note": "committed"}
+        return {"ok": True, "note": "committed (readback verified)"}
+    elif submitted and not verified:
+        # 插件说提交了但回读不出——结果未知，待对账（不判已提交，防假成功）
+        ledger.record_result(key, "unknown", platform_receipt=readback[:200] or error or "")
+        audit.append("bridge_reply_unknown", {
+            "problem_id": problem_id, "mode": mode,
+            "readback": (readback or "")[:120], "error": (error or "")[:80],
+        }, actor=confirmed_by)
+        return {"ok": False, "note": "unknown — readback mismatch, needs reconciliation"}
     else:
         ledger.record_result(key, "failed", platform_receipt=(error or "submission failed"))
         audit.append("bridge_reply_failed", {

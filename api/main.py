@@ -118,16 +118,22 @@ class ReplyPrepare(BaseModel):
 
 @app.post("/reply/prepare")
 async def reply_prepare(body: ReplyPrepare):
-    """第一步：校验 + 生成幂等键（不提交）。返回预览与 key。"""
-    ok, why = rules.validate_reply(body.reply_text)
-    if not ok:
-        raise HTTPException(status_code=400, detail=f"rule-invalid: {why}")
+    """第一步：闸门校验 + 生成幂等键（不提交）。
+
+    人工路径：human_confirmed=True（人工已看预览）。
+    敏感件在闸门②被拒（必须人在中通原系统处理）。
+    """
     parcel = None
     data = _state.get("cache")
     if data:
         parcel = next((i for i in data["items"] if i["problem_id"] == body.problem_id), None)
-    if parcel and rules.is_sensitive(parcel.get("ptype") or "", parcel.get("description") or ""):
-        raise HTTPException(status_code=403, detail="sensitive type — must be handled manually")
+    if parcel is None:
+        raise HTTPException(status_code=404, detail="problem not in latest scan — scan first")
+    from service.gatekeeper import run_gates
+    gate = await run_gates(parcel, switches={"auto_enabled": False}, human_confirmed=True)
+    if not gate.passed:
+        raise HTTPException(status_code=403, detail=f"gate:{gate.gate}: {gate.reason}")
+    # 绑定人工编辑后的文本（prepare 冻结的就是最终提交文本）
     key = replier.ledger.make_idempotency_key(
         body.problem_id, "reply", body.reply_text, confirmed_by="human")
     return {"ok": True, "idempotency_key": key, "reply_text": body.reply_text,
@@ -143,9 +149,18 @@ class ReplyCommit(BaseModel):
 
 @app.post("/reply/commit")
 async def reply_commit(body: ReplyCommit):
-    """第二步：凭幂等键真实提交 + 回读校验（敏感类在 prepare 已拒；这里再查一次）。"""
+    """第二步：凭 prepare 签发的幂等键真实提交。
+
+    闸门在 prepare 已过；commit 只认 prepare 的 key（文本不一致 → key 对不上 → 拒），
+    敏感词再查一次（防御纵深）。
+    """
     if rules.is_sensitive("", body.reply_text):
         raise HTTPException(status_code=403, detail="sensitive content — blocked")
+    # 校验 key 与文本绑定（prepare 冻结的就是这个文本；不一致 = 没走过 prepare）
+    expect_key = replier.ledger.make_idempotency_key(
+        body.problem_id, "reply", body.reply_text, confirmed_by="human")
+    if body.idempotency_key != expect_key:
+        raise HTTPException(status_code=403, detail="idempotency key mismatch — must call /reply/prepare first")
     try:
         return await replier.commit_reply(
             problem_id=body.problem_id, waybill_no=body.waybill_no,
@@ -169,20 +184,29 @@ class BridgeIngestList(BaseModel):
     page_url: str | None = None
 
 
-@app.post("/bridge/ingest/list")
-async def bridge_ingest_list(body: BridgeIngestList):
-    """插件上报列表 → 服务端去重建档、跑闸门计划，返回统计。
+# 鉴权：共享密钥（X-Bridge-Token），本机 127.0.0.1 + 密钥双保险
+from shared import bridge_auth
+from fastapi import Header
 
-    数据从插件来（不再走 Playwright），解析逻辑与 problem_reader 对齐。
-    """
+
+def _auth(token: str | None) -> None:
+    if not bridge_auth.verify(token):
+        raise HTTPException(status_code=401, detail="bridge auth failed")
+
+
+@app.post("/bridge/ingest/list")
+async def bridge_ingest_list(body: BridgeIngestList, x_bridge_token: str | None = Header(default=None)):
+    """插件上报列表 → 服务端去重建档、跑闸门计划，返回统计。"""
+    _auth(x_bridge_token)
     from service.bridge import ingest_rows
     result = await ingest_rows(body.rows, body.page_url)
     return result
 
 
 @app.get("/bridge/tasks/pending")
-async def bridge_tasks_pending(limit: int = 5):
-    """插件轮询：该回哪条、用什么话术（已过四层闸门：开关/敏感/AI审核/幂等）。"""
+async def bridge_tasks_pending(limit: int = 5, x_bridge_token: str | None = Header(default=None)):
+    """插件轮询：该回哪条、用什么话术（已过四层闸门）。下发时落意图账本。"""
+    _auth(x_bridge_token)
     from service.bridge import pending_tasks
     return await pending_tasks(limit=limit)
 
@@ -198,8 +222,9 @@ class BridgeIngestResult(BaseModel):
 
 
 @app.post("/bridge/ingest/result")
-async def bridge_ingest_result(body: BridgeIngestResult):
+async def bridge_ingest_result(body: BridgeIngestResult, x_bridge_token: str | None = Header(default=None)):
     """插件回传结果 → 服务端落账本、审计、回读校验。"""
+    _auth(x_bridge_token)
     from service.bridge import ingest_result
     return await ingest_result(
         problem_id=body.problem_id, reply_text=body.reply_text,
@@ -209,8 +234,9 @@ async def bridge_ingest_result(body: BridgeIngestResult):
 
 
 @app.get("/bridge/config")
-async def bridge_config():
+async def bridge_config(x_bridge_token: str | None = Header(default=None)):
     """插件拉配置：模式（semi/full）、轮询间隔、敏感词（供插件本地预过滤）。"""
+    _auth(x_bridge_token)
     from shared.config import SENSITIVE_KEYWORDS
     return {
         "mode": cfg.get("write.auto_reply.mode", "semi"),
@@ -219,4 +245,10 @@ async def bridge_config():
         "sensitive_keywords": SENSITIVE_KEYWORDS,
         "enabled": auto_reply.auto_reply_enabled(),
     }
+
+
+@app.get("/bridge/fingerprint")
+async def bridge_fingerprint():
+    """插件配置页展示的密钥指纹（不是密钥本身，供人工核对两边配的是同一把）。"""
+    return {"fingerprint": bridge_auth.key_fingerprint()}
 

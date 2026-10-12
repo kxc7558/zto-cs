@@ -19,53 +19,6 @@ from shared.models import ParcelList, ProblemParcel
 from service.browser import BrowserSession
 
 
-class BrowserSession:
-    """连接已有调试 Chrome（带登录态）。掉线重连。"""
-
-    def __init__(self) -> None:
-        self._pw = None
-        self._browser = None
-        self._context = None
-        self._page = None
-        self._lock = asyncio.Lock()  # 同账号串行（硬规则）
-
-    async def _connect(self) -> None:
-        self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.connect_over_cdp(CDP_WS_URL)
-        ctx = self._browser.contexts[0] if self._browser.contexts else None
-        if ctx is None:
-            raise RuntimeError("no browser context on CDP target")
-        self._context = ctx
-        # 找 problemQuery tab（可能开着多个，取最后一个——最新打开的）
-        target = None
-        for pg in ctx.pages:
-            if "problemQuery" in pg.url:
-                target = pg
-        if target is not None:
-            self._page = target
-        else:
-            pages = ctx.pages
-            self._page = pages[-1] if pages else await ctx.new_page()
-
-    async def page(self):
-        async with self._lock:
-            if self._page is None or self._browser.is_connected() is False:
-                await self._connect()
-            return self._page
-
-    async def goto(self, url: str):
-        p = await self.page()
-        await asyncio.sleep(random.uniform(2, 6))  # 反风控：请求间随机延迟
-        await p.goto(url, wait_until="domcontentloaded", timeout=60_000)
-        return p
-
-    async def close(self) -> None:
-        if self._browser:
-            await self._browser.close()
-        if self._pw:
-            await self._pw.stop()
-
-
 def _make_problem_id(row: dict) -> str:
     """问题事件锚：运单号+类型+登记时间 合成（§15.4，无天然键时确定性合成）。"""
     raw = f"{row.get('waybill_no','')}|{row.get('ptype','')}|{row.get('created_at','')}"

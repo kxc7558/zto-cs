@@ -1,7 +1,7 @@
 write:
   enabled: false
   auto_reply:
-    enabled: true
+    enabled: false
 scan:
   interval_seconds: 300
   cache_ttl_seconds: 300

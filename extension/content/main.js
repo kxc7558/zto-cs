@@ -99,9 +99,35 @@ async function fillQuickReply(replyText, mode) {
   if (!submitBtn) return { ok: false, error: "submit button not found" };
   submitBtn.click();
   lastSendAt = now;
-  await sleep(2000);
-  // 回读：行上的「最新回复内容」应包含刚提交的文本
-  return { ok: true, filled: true, submitted: true, note: "auto-submitted" };
+  await sleep(2500);
+  // 回读校验：目标行的「最新回复内容」应包含刚提交的文本（界面提示成功不算数）
+  const readback = readRowReply(needle);
+  const ok = replyText.slice(0, 12) && (readback || "").includes(replyText.slice(0, 12));
+  return { ok: true, filled: true, submitted: !!ok, readback: readback || "",
+           note: ok ? "auto-submitted-verified" : "submitted-but-readback-missing" };
+}
+
+function readRowReply(needle) {
+  // 读目标行的「最新回复内容」列（表头映射）
+  const tables = Array.from(document.querySelectorAll("table"));
+  let headerTable = null;
+  for (let i = 0; i < tables.length; i++) {
+    const ths = Array.from(tables[i].querySelectorAll("thead th")).map((th) => th.innerText.trim());
+    if (ths.some((h) => h.includes("问题件类型"))) { headerTable = i; break; }
+  }
+  if (headerTable === null) return "";
+  const ths = Array.from(tables[headerTable].querySelectorAll("thead th")).map((th) => th.innerText.trim());
+  const replyIdx = ths.findIndex((h) => h.includes("最新回复内容"));
+  if (replyIdx < 0) return "";
+  for (let k = headerTable + 1; k < tables.length; k++) {
+    for (const tr of tables[k].querySelectorAll("tbody tr")) {
+      if (needle && tr.innerText.includes(needle)) {
+        const cells = Array.from(tr.querySelectorAll("td")).map((td) => td.innerText.trim());
+        return cells[replyIdx] || "";
+      }
+    }
+  }
+  return "";
 }
 
 function isVisible(el) {
@@ -137,14 +163,14 @@ async function pollOnce() {
       link.click();
       await sleep(800);
       const result = await fillQuickReply(task.reply_text, mode);
-      // 4. 回传结果
+      // 4. 回传结果（readback 供服务端判定，submitted 旗子不算数）
       await sendToBg({
         type: "INGEST_RESULT",
         payload: {
           problem_id: task.problem_id,
           reply_text: task.reply_text,
           submitted: !!result.submitted,
-          readback: result.note || "",
+          readback: result.readback || result.note || "",
           mode,
           error: result.error || null,
         },

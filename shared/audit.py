@@ -1,10 +1,13 @@
 """审计哈希链（防篡改）。每条记录带前一条的哈希；按月分屉、自动轮转。"""
 import hashlib
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 
 from shared.config import AUDIT_DIR
+
+_lock = threading.Lock()
 
 
 def _month_dir(now: datetime) -> Path:
@@ -42,10 +45,15 @@ def append(event: str, payload: dict, actor: str = "system") -> dict:
 
 
 def verify(month: str | None = None) -> dict:
-    """验证哈希链完整性：改一条，后面全对不上。"""
-    d = AUDIT_DIR / month if month else max(
-        (p for p in AUDIT_DIR.iterdir() if p.is_dir()), default=AUDIT_DIR
-    )
+    """验证哈希链完整性：改一条，后面全对不上。
+
+    默认月 = 按目录名（YYYY-MM 格式）取最新，不按字典序（避免 2 月 > 10 月 的字典序错位）。
+    """
+    if month:
+        d = AUDIT_DIR / month
+    else:
+        candidates = [p for p in AUDIT_DIR.iterdir() if p.is_dir() and len(p.name) == 7 and p.name[4] == "-"]
+        d = max(candidates, key=lambda p: p.name, default=AUDIT_DIR)
     f = d / "audit.jsonl"
     if not f.exists():
         return {"ok": True, "records": 0, "note": "no records"}

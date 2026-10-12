@@ -7,7 +7,10 @@
   ③ 模板匹配 + 确定性规则校验（必填/长度/敏感词）
   ④ AI 审核（本机模型，fail-safe 转人工）
 
-任何一层不过 → 返回不放行 + 理由。执行通道拿到的是"已过全部闸门"的回复。
+任何一层不过 → 返回不放行 + 理由 + 停在哪层。执行通道拿到的是"已过全部闸门"的回复。
+
+**所有写路径必须经过本管线**——包括人工单条回复（/reply/prepare+commit）。
+人工路径与自动路径的差异只在①（人工确认代替总开关）与④（人工已审，AI 审核可跳过）。
 """
 from dataclasses import dataclass
 
@@ -25,13 +28,18 @@ class GateResult:
 
 
 async def run_gates(parcel: ProblemParcel, switches: dict,
-                    reviewer_impl=None) -> GateResult:
-    """跑全部闸门。switches: {auto_enabled: bool}。reviewer_impl 可注入（测试用）。"""
-    # ① 总开关
-    if not switches.get("auto_enabled"):
+                    reviewer_impl=None, human_confirmed: bool = False) -> GateResult:
+    """跑全部闸门。
+
+    switches: {auto_enabled: bool}
+    human_confirmed: True 表示人工已看预览点过确认（①由人代替；④人工已审可跳过）。
+    reviewer_impl 可注入（测试用）。
+    """
+    # ① 总开关（人工确认可代替）
+    if not human_confirmed and not switches.get("auto_enabled"):
         return GateResult(False, None, "auto reply disabled", "switch")
 
-    # ② 敏感类硬闸（不受开关影响）
+    # ② 敏感类硬闸（不受开关影响，人工路径同样拦——敏感件必须人在中通原系统处理）
     if parcel.needs_human or rules.is_sensitive(parcel.ptype or "", parcel.description or ""):
         return GateResult(False, None, "sensitive type", "sensitive")
 
@@ -45,14 +53,16 @@ async def run_gates(parcel: ProblemParcel, switches: dict,
     if not ok:
         return GateResult(False, None, f"rule-invalid:{why}", "rules")
 
-    # ④ AI 审核（fail-safe：故障 → human）
-    impl = reviewer_impl or reviewer
-    review = await impl.review_reply(
-        ptype=parcel.ptype or "", description=parcel.description or "",
-        reply_text=text, outlet_from=parcel.outlet_from or "", outlet_notify=parcel.outlet_notify or "",
-    )
-    if review.get("verdict") != "pass":
-        return GateResult(False, None, f"ai-review:{review.get('reason', 'human')}", "ai_review")
+    # ④ AI 审核（人工确认路径跳过——人已审；自动路径 fail-safe：故障 → human）
+    if not human_confirmed:
+        impl = reviewer_impl or reviewer.AiReviewer()
+        review = await impl.review_reply(
+            ptype=parcel.ptype or "", description=parcel.description or "",
+            reply_text=text, outlet_from=parcel.outlet_from or "", outlet_notify=parcel.outlet_notify or "",
+        )
+        if review.get("verdict") != "pass":
+            return GateResult(False, None, f"ai-review:{review.get('reason', 'human')}", "ai_review")
 
-    audit.append("gates_passed", {"problem_id": parcel.problem_id, "ptype": parcel.ptype})
+    audit.append("gates_passed", {"problem_id": parcel.problem_id, "ptype": parcel.ptype,
+                                  "human": human_confirmed})
     return GateResult(True, text, "ok", "all")
