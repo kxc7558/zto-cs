@@ -8,3 +8,5 @@ config/bridge_secret.key
 config/machine_id
 config/VERSION
 bak/
+update-server/data/
+*.key
