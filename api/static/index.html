@@ -9,123 +9,77 @@
   * { box-sizing:border-box; margin:0; padding:0; }
   body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
   header { background:var(--card); border-bottom:1px solid var(--line); padding:16px 28px;
-           display:flex; align-items:center; gap:16px; }
+           display:flex; align-items:center; }
   header h1 { font-size:20px; font-weight:600; }
-  header .sub { font-size:13px; color:var(--sub); }
-  .auto-box { margin-left:auto; display:flex; align-items:center; gap:12px;
-              background:#f2f3f5; padding:8px 16px; border-radius:20px; }
-  .auto-box .label { font-size:14px; }
-  .switch { position:relative; width:46px; height:26px; background:#c9cdd4; border-radius:13px;
+  .auto-box { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .switch { position:relative; width:52px; height:28px; background:#c9cdd4; border-radius:14px;
             cursor:pointer; transition:.2s; }
   .switch.on { background:var(--green); }
-  .switch::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px;
+  .switch::after { content:""; position:absolute; top:3px; left:3px; width:22px; height:22px;
                    background:#fff; border-radius:50%; transition:.2s; }
-  .switch.on::after { left:23px; }
-  .mode-tag { font-size:12px; padding:3px 10px; border-radius:10px; }
-  .mode-tag.semi { background:#fff7e8; color:var(--orange); }
-  .mode-tag.full { background:#ffece8; color:var(--red); }
-  main { max-width:1100px; margin:24px auto; padding:0 28px; }
-  .stats { display:flex; gap:16px; margin-bottom:20px; }
-  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px;
-          padding:18px 24px; flex:1; }
-  .stat .num { font-size:32px; font-weight:700; }
-  .stat .label { font-size:13px; color:var(--sub); margin-top:4px; }
-  .stat.urgent .num { color:var(--red); }
-  .stat.done .num { color:var(--green); }
-  .section-title { font-size:16px; font-weight:600; margin:24px 0 12px; }
+  .switch.on::after { left:27px; }
+  .switch-label { font-size:15px; }
+  main { max-width:760px; margin:24px auto; padding:0 20px; }
+  /* 只留一个大数字：还有几件没回 */
+  .big-stat { background:var(--card); border:1px solid var(--line); border-radius:16px;
+              padding:32px; text-align:center; margin-bottom:20px; }
+  .big-stat .num { font-size:56px; font-weight:700; }
+  .big-stat .num.zero { color:var(--green); }
+  .big-stat .num.nonzero { color:var(--orange); }
+  .big-stat .label { font-size:15px; color:var(--sub); margin-top:6px; }
+  .list-title { font-size:16px; font-weight:600; margin:20px 0 10px; display:flex; align-items:center; }
+  .refresh-btn { margin-left:auto; font-size:13px; color:var(--blue); cursor:pointer;
+                 background:none; border:none; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
-  table { width:100%; border-collapse:collapse; font-size:14px; }
-  th, td { padding:12px 16px; text-align:left; border-bottom:1px solid var(--line); }
-  th { background:#fafbfc; color:var(--sub); font-weight:500; white-space:nowrap; }
-  td.desc { max-width:320px; }
-  .tag { font-size:12px; padding:3px 10px; border-radius:6px; white-space:nowrap; }
-  .tag.red { background:#ffece8; color:var(--red); }
-  .tag.green { background:#e8ffea; color:var(--green); }
-  .tag.orange { background:#fff7e8; color:var(--orange); }
-  .tag.blue { background:#e8f3ff; color:var(--blue); }
-  .empty { padding:48px; text-align:center; color:var(--sub); }
-  .empty .big { font-size:40px; margin-bottom:8px; }
-  button.btn { border:1px solid var(--line); background:var(--card); padding:8px 16px;
-               border-radius:8px; cursor:pointer; font-size:14px; }
-  button.btn.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
-  button.btn:disabled { opacity:.5; cursor:not-allowed; }
-  dialog { border:none; border-radius:16px; padding:28px; width:560px; box-shadow:0 12px 48px rgba(0,0,0,.18); }
-  dialog::backdrop { background:rgba(0,0,0,.4); }
-  dialog h3 { font-size:18px; margin-bottom:8px; }
-  .meta { font-size:14px; color:var(--sub); margin-bottom:16px; line-height:1.8; }
-  textarea { width:100%; height:100px; border:1px solid var(--line); border-radius:10px;
-             padding:12px; font-size:14px; font-family:inherit; resize:vertical; }
-  .notice { background:#fff7e8; border:1px solid #ffe4a0; color:#8f4a00; font-size:13px;
-            padding:10px 14px; border-radius:8px; margin:12px 0; line-height:1.6; }
-  .actions { display:flex; gap:12px; justify-content:flex-end; margin-top:18px; }
-  .hint { font-size:12px; color:var(--sub); margin-top:8px; }
+  .item { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; }
+  .item:last-child { border-bottom:none; }
+  .item .main { flex:1; min-width:0; }
+  .item .type { font-size:15px; font-weight:600; }
+  .item .desc { font-size:13px; color:var(--sub); margin-top:4px; overflow:hidden;
+                text-overflow:ellipsis; white-space:nowrap; }
+  .item .who { font-size:12px; color:var(--sub); margin-top:4px; }
+  .badge { font-size:12px; padding:4px 12px; border-radius:12px; white-space:nowrap; }
+  .badge.red { background:#ffece8; color:var(--red); }
+  .badge.green { background:#e8ffea; color:var(--green); }
+  .badge.orange { background:#fff7e8; color:var(--orange); }
+  .empty { padding:56px 20px; text-align:center; color:var(--sub); }
+  .empty .icon { font-size:44px; margin-bottom:10px; }
+  .empty .tip { font-size:14px; }
   #toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); background:#1f2329;
            color:#fff; padding:12px 24px; border-radius:10px; font-size:14px; opacity:0; transition:.3s; }
   #toast.show { opacity:1; }
+  .ai-check { margin-top:20px; display:none; }
+  .ai-check.show { display:block; }
+  .ai-check .box { background:#fff7e8; border:1px solid #ffe4a0; border-radius:12px; padding:14px 18px;
+                   font-size:13px; color:#8f4a00; line-height:1.8; }
 </style>
 </head>
 <body>
 <header>
-  <div>
-    <h1>问题件助手</h1>
-    <div class="sub">中通快运 · 自动帮您盯问题件、准备回复</div>
-  </div>
+  <h1>问题件助手</h1>
   <div class="auto-box">
-    <span class="label">自动回复</span>
+    <span class="switch-label">自动回复</span>
     <div class="switch" id="autoSwitch" onclick="toggleAuto()"></div>
-    <span class="mode-tag semi" id="modeTag">半自动（填好等您确认）</span>
   </div>
 </header>
 <main>
-  <div class="stats">
-    <div class="stat urgent">
-      <div class="num" id="statWait">–</div>
-      <div class="label">等待回复</div>
-    </div>
-    <div class="stat">
-      <div class="num" id="statAuto">–</div>
-      <div class="label">可自动回复（已通过审核）</div>
-    </div>
-    <div class="stat">
-      <div class="num" id="statHuman">–</div>
-      <div class="label">需要您亲自处理</div>
-    </div>
-    <div class="stat done">
-      <div class="num" id="statDone">–</div>
-      <div class="label">已回复</div>
-    </div>
+  <div class="big-stat">
+    <div class="num" id="bigNum">–</div>
+    <div class="label" id="bigLabel">还没回的问题件</div>
   </div>
 
-  <div class="section-title">问题件列表 <span style="font-size:12px;color:var(--sub);font-weight:400">（来自中通系统 · 每 5 分钟自动刷新）</span></div>
-  <div class="card">
-    <table>
-      <thead>
-        <tr><th>类型</th><th class="desc">问题描述</th><th>发布网点</th><th>通知网点</th>
-            <th>回复情况</th><th>状态</th></tr>
-      </thead>
-      <tbody id="rows"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
-    </table>
+  <div class="ai-check" id="aiCheck">
+    <div class="box" id="aiBox"></div>
   </div>
-  <div class="hint">· 红色「敏感件」涉及责任判定，系统不会自动回复，需要您在客服日常里亲自处理<br>
-  · 开启自动回复后，系统把回复填好，<b>您确认后才发出</b>（半自动）</div>
+
+  <div class="list-title">问题件 <button class="refresh-btn" onclick="loadList(true)">刷新</button></div>
+  <div id="breakerNote" style="font-size:12px;color:#f53f3f;margin:-4px 0 10px;display:none"></div>
+  <div class="card" id="list"><div class="empty">加载中…</div></div>
 </main>
-
-<dialog id="replyDlg">
-  <h3>回复这条问题件</h3>
-  <div class="meta" id="dlgMeta"></div>
-  <textarea id="dlgText" placeholder="输入回复内容…"></textarea>
-  <div class="notice">点「确认发出」后，回复会立即写入中通系统，请先核对内容。</div>
-  <div class="actions">
-    <button class="btn" onclick="dlg.close()">取消</button>
-    <button class="btn primary" id="dlgCommit" onclick="commitReply()">确认发出</button>
-  </div>
-</dialog>
 
 <div id="toast"></div>
 <script>
 const API = location.origin;
-const dlg = document.getElementById('replyDlg');
-let current = null;
 
 function esc(s) { return (s||'').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -138,72 +92,86 @@ function toast(msg) {
 
 async function refreshAuto() {
   const s = await (await fetch(API + '/auto-reply/status')).json();
-  const mode = (await (await fetch(API + '/bridge/config')).json()).mode || 'semi';
   document.getElementById('autoSwitch').classList.toggle('on', s.enabled);
-  const tag = document.getElementById('modeTag');
-  tag.textContent = mode === 'full' ? '全自动（自动发出）' : '半自动（填好等您确认）';
-  tag.className = 'mode-tag ' + mode;
 }
 
 async function toggleAuto() {
   const s = await (await fetch(API + '/auto-reply/status')).json();
   const next = !s.enabled;
+  if (next && !confirm('开启后，系统会帮您把回复写好。\n最后一步（点发送）还是您来确认。\n\n要开启吗？')) return;
   const r = await (await fetch(API + '/auto-reply/toggle', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({enabled: next})
   })).json();
-  if (r.ok) {
-    toast(next ? '已开启：系统把回复填好，您确认后发出' : '已关闭');
-    refreshAuto();
-  }
+  if (r.ok) { toast(next ? '已开启' : '已关闭'); refreshAuto(); }
 }
 
 async function loadList(force) {
-  const tb = document.getElementById('rows');
-  tb.innerHTML = '<tr><td colspan="6" class="empty">加载中…</td></tr>';
+  const box = document.getElementById('list');
+  box.innerHTML = '<div class="empty">加载中…</div>';
   try {
     const data = await (await fetch(API + '/problem-parcels' + (force ? '?force=true' : ''))).json();
     const items = data.items || [];
-    const wait = items.filter(i => !i.latest_reply && i.needs_human).length;
-    const autoN = items.filter(i => !i.latest_reply && !i.needs_human).length;
-    const humanN = items.filter(i => !i.latest_reply && i.needs_human).length;
-    const doneN = items.filter(i => i.latest_reply).length;
-    document.getElementById('statWait').textContent = wait + autoN;
-    document.getElementById('statAuto').textContent = autoN;
-    document.getElementById('statHuman').textContent = humanN;
-    document.getElementById('statDone').textContent = doneN;
+    const wait = items.filter(i => !i.latest_reply).length;
+    // 大数字：还有几件没回
+    const num = document.getElementById('bigNum');
+    num.textContent = wait;
+    num.className = 'num ' + (wait === 0 ? 'zero' : 'nonzero');
+
     if (!items.length) {
-      tb.innerHTML = '<tr><td colspan="6" class="empty"><div class="big">✓</div>暂无需要处理的问题件</td></tr>';
+      box.innerHTML = '<div class="empty"><div class="icon">✓</div><div class="tip">没有需要处理的问题件</div></div>';
       return;
     }
-    // 未回复的排前面，敏感的再排前面
-    items.sort((a,b) => {
-      const ka = (a.latest_reply?2:0) + (a.needs_human?0:1);
-      const kb = (b.latest_reply?2:0) + (b.needs_human?0:1);
-      return ka - kb;
-    });
-    tb.innerHTML = items.slice(0, 30).map(it => {
-      let status = '';
-      if (it.needs_human && !it.latest_reply) status = '<span class="tag red">敏感件 · 请亲自处理</span>';
-      else if (it.latest_reply) status = '<span class="tag green">已回复</span>';
-      else status = '<span class="tag blue">待回复</span>';
-      return `<tr>
-        <td><b>${esc(it.ptype)}</b><br><span style="font-size:12px;color:var(--sub)">${esc(it.category)}</span></td>
-        <td class="desc" title="${esc(it.description)}">${esc((it.description||'').slice(0,70))}</td>
-        <td>${esc(it.outlet_from)}</td>
-        <td>${esc(it.outlet_notify)}</td>
-        <td>${esc((it.latest_reply||'—').slice(0,30))}</td>
-        <td>${status}</td>
-      </tr>`;
+    // 未回复排前面；每个只显示三行字：类型、一句话、网点
+    const sorted = [...items].sort((a,b) => (a.latest_reply?1:0) - (b.latest_reply?1:0));
+    box.innerHTML = sorted.slice(0, 20).map(it => {
+      let badge;
+      if (it.latest_reply) badge = '<span class="badge green">已回复</span>';
+      else if (it.needs_human) badge = '<span class="badge red">要您亲自处理</span>';
+      else badge = '<span class="badge orange">没回</span>';
+      return `<div class="item">
+        <div class="main">
+          <div class="type">${esc(it.ptype)}</div>
+          <div class="desc">${esc((it.description||'').slice(0,50))}</div>
+          <div class="who">${esc(it.outlet_from)} → ${esc(it.outlet_notify)}</div>
+        </div>
+        ${badge}
+      </div>`;
     }).join('');
   } catch (e) {
-    tb.innerHTML = `<tr><td colspan="6" class="empty">加载失败：${esc(e.message)}<br>请确认中通网页已登录、服务已启动</td></tr>`;
+    box.innerHTML = `<div class="empty">加载失败，请确认中通网页已登录</div>`;
   }
 }
 
-setInterval(() => loadList(false), 300000); // 5 分钟自动刷新
+async function loadBreaker() {
+  try {
+    const b = await (await fetch(API + '/breaker/status')).json();
+    if (b.tripped) {
+      const el = document.getElementById('breakerNote');
+      el.style.display = 'block';
+      el.textContent = '系统检测到异常已自动暂停自动回复，管理员已收到通知。';
+    }
+  } catch (e) { /* 静默 */ }
+}
+
+async function loadRetrospect() {
+  try {
+    const r = await (await fetch(API + '/retrospect/latest')).json();
+    const flagged = (r.flagged || []).length;
+    if (flagged > 0) {
+      const box = document.getElementById('aiCheck');
+      box.classList.add('show');
+      document.getElementById('aiBox').innerHTML =
+        `<b>系统自查发现 ${flagged} 条回复建议复查</b>（详情已通知管理员），请留意近期的回复。`;
+    }
+  } catch (e) { /* 静默 */ }
+}
+
+setInterval(() => loadList(false), 300000);
 refreshAuto();
 loadList(false);
+loadRetrospect();
+loadBreaker();
 </script>
 </body>
 </html>

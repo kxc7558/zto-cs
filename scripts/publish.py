@@ -12,6 +12,9 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+# 家庭服务器（Tailscale/内网 IP）不走系统代理
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from signing import sign_payload
 
@@ -66,7 +69,7 @@ def main():
                          "signature": sig["signature"],
                          "sha256": sig["sha256"]}).encode("utf-8"),
         headers={"Content-Type": "application/json", "X-Publish-Key": key})
-    r = urllib.request.urlopen(req, timeout=60)
+    r = _opener.open(req, timeout=60)
     print("[完成]", r.read().decode("utf-8"))
 
 

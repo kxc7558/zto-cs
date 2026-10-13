@@ -82,6 +82,11 @@ async def run_retrospect(limit: int = 20) -> dict:
                      "verdict": "skipped", "reason": f"analysis-failed:{type(e).__name__}"}
         flagged.append(entry)
 
+    flag_count = len([e for e in flagged if e["verdict"] == "flag"])
+    # Q4：flag 进止损计数（超 3 条自动降级 semi）
+    from service.breaker import record_ai_flag
+    for _ in range(flag_count):
+        record_ai_flag()
     result = {"reviewed": len(flagged),
               "flagged": [e for e in flagged if e["verdict"] == "flag"],
               "skipped": [e for e in flagged if e["verdict"] == "skipped"],

@@ -64,6 +64,10 @@ async def ingest_rows(rows: list[dict], page_url: str | None) -> dict:
             plan_human.append({"problem_id": p.problem_id, "reason": "sensitive" if p.needs_human else why})
         else:
             plan_auto.append({"problem_id": p.problem_id})
+    # Q9 工时基线：问题件首次出现时登记
+    from db.metrics import record_first_seen
+    for p in uniq:
+        record_first_seen(p.problem_id, p.ptype or "")
     # 写缓存供 pending_tasks 取未回复件
     from service.bridge_cache import save_parcels
     save_parcels([_json.loads(p.model_dump_json()) for p in uniq])
@@ -162,6 +166,8 @@ async def ingest_result(problem_id: str, reply_text: str, submitted: bool,
     verified = bool(readback) and (reply_text[:12] in readback)
     if verified:
         ledger.record_result(key, "committed", platform_receipt=readback[:200])
+        from db.metrics import record_committed
+        record_committed(problem_id)
         audit.append("bridge_reply_committed", {
             "problem_id": problem_id, "mode": mode, "text_len": len(reply_text),
             "readback": readback[:120], "verified": True,

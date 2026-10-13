@@ -327,6 +327,20 @@ async def retrospect_latest():
     return latest_retrospect()
 
 
+@app.get("/metrics/hours")
+async def metrics_hours():
+    """工时基线汇总（Q9：为减员承诺定量）。"""
+    from db.metrics import summary
+    return summary()
+
+
+@app.get("/breaker/status")
+async def breaker_status():
+    """止损状态（工作台显示：今日 AI flag 数/验证码次数/是否触发过）。"""
+    from service.breaker import status
+    return status()
+
+
 @app.get("/bridge/fingerprint")
 async def bridge_fingerprint():
     """插件配置页展示的密钥指纹（不是密钥本身，供人工核对两边配的是同一把）。"""

@@ -6,3 +6,7 @@ write:
 scan:
   interval_seconds: 300
   cache_ttl_seconds: 300
+circuit_breaker:
+  date: '2026-10-13'
+  flagged_today: 0
+  captcha_today: 0

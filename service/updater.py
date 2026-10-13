@@ -22,6 +22,9 @@ from pathlib import Path
 import httpx
 
 from shared import audit
+
+# 家庭服务器（Tailscale/内网）不走系统代理
+_trust_env = False
 from shared import bridge_auth
 from shared.config import ROOT, LOG_DIR
 
@@ -83,7 +86,7 @@ def check_version() -> dict | None:
     """查服务器最新版本。返回 manifest 或 None（服务器不可达）。"""
     try:
         r = httpx.get(f"{_update_server()}/version/latest",
-                      headers=_auth_headers(), timeout=10)
+                      headers=_auth_headers(), timeout=10, trust_env=_trust_env)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -215,7 +218,7 @@ def poll_and_apply() -> dict:
 
     try:
         r = httpx.get(f"{_update_server()}/version/download/{manifest['version']}",
-                      headers=_auth_headers(), timeout=60)
+                      headers=_auth_headers(), timeout=60, trust_env=_trust_env)
         r.raise_for_status()
         result = apply_update(manifest, r.content)
         return result
