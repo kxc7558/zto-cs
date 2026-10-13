@@ -138,6 +138,42 @@ async def pending_tasks(limit: int = 5) -> dict:
     return {"ok": True, "enabled": True, "tasks": tasks}
 
 
+def pending_confirmations() -> list[dict]:
+    """待确认队列：插件填好等人工确认的回复（工作台展示 + 确认下发）。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM write_ledger WHERE status='pending' AND confirmed_by='extension:semi'"
+            " ORDER BY intent_ts").fetchall()
+        return [dict(r) for r in rows]
+
+
+def confirm_and_dispatch(problem_id: str, confirmed_by: str) -> dict:
+    """工作台确认：pending → confirmed（待插件执行提交指令）。返回指令内容。"""
+    rows = ledger.get_by_problem(problem_id)
+    row = next((x for x in rows if x["status"] == "pending"), None)
+    if not row:
+        return {"ok": False, "note": "no pending row"}
+    now = datetime.now().isoformat(timespec="seconds")
+    c = _conn()
+    c.execute("UPDATE write_ledger SET status='confirmed', result_ts=?, confirmed_by=? WHERE id=?",
+              (now, confirmed_by, row["id"]))
+    c.commit()
+    audit.append("bridge_reply_confirmed", {
+        "problem_id": problem_id, "confirmed_by": confirmed_by,
+        "reply_text": row["reply_text"][:80],
+    }, actor=confirmed_by)
+    return {"ok": True, "action": "execute_submit",
+            "problem_id": problem_id, "reply_text": row["reply_text"]}
+
+
+def _conn():
+    import sqlite3
+    from shared.config import DB_PATH
+    c = sqlite3.connect(DB_PATH)
+    c.row_factory = sqlite3.Row
+    return c
+
+
 async def ingest_result(problem_id: str, reply_text: str, submitted: bool,
                         readback: str, mode: str, error: str | None) -> dict:
     """插件回传结果 → 落账本、审计。
@@ -157,12 +193,12 @@ async def ingest_result(problem_id: str, reply_text: str, submitted: bool,
 
     # 判定标准（review HIGH-3：semi 模式插件填好等人工 ≠ failed）
     if mode == "semi" and not submitted:
-        # semi：插件已把回复填进弹窗，等人工点提交——记 pending（不是 failed，
-        # 否则每轮重发重复填）。人工点提交后由工作台 /reply/commit 记 committed。
+        # semi：插件已把回复填进弹窗，等人工在工作台点「确认发送」——记 pending。
+        # 工作台确认后走 /bridge/confirm 下发提交指令，插件执行提交。
         audit.append("bridge_reply_filled", {
             "problem_id": problem_id, "mode": mode, "text_len": len(reply_text),
         }, actor=confirmed_by)
-        return {"ok": True, "note": "filled-awaiting-human"}
+        return {"ok": True, "note": "filled-awaiting-confirm"}
     verified = bool(readback) and (reply_text[:12] in readback)
     if verified:
         ledger.record_result(key, "committed", platform_receipt=readback[:200])

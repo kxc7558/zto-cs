@@ -294,6 +294,39 @@ async def bridge_ingest_result(body: BridgeIngestResult, x_bridge_token: str | N
     )
 
 
+@app.get("/bridge/confirmations")
+async def bridge_confirmations(x_bridge_token: str | None = Header(default=None)):
+    """待确认队列（工作台展示：插件已填好、等人工确认的回复）。"""
+    _auth(x_bridge_token)
+    from service.bridge import pending_confirmations
+    return {"items": pending_confirmations()}
+
+
+class BridgeConfirm(BaseModel):
+    problem_id: str
+
+
+@app.post("/bridge/confirm")
+async def bridge_confirm(body: BridgeConfirm, x_bridge_token: str | None = Header(default=None)):
+    """工作台确认发送：pending → confirmed，返回提交指令（插件执行）。"""
+    _auth(x_bridge_token)
+    from service.bridge import confirm_and_dispatch
+    return confirm_and_dispatch(body.problem_id, confirmed_by="human:workbench")
+
+
+@app.get("/bridge/history")
+async def bridge_history(x_bridge_token: str | None = Header(default=None)):
+    """留存数据：全部写账本记录（工作台查询校对用）。"""
+    _auth(x_bridge_token)
+    import sqlite3
+    from shared.config import DB_PATH
+    c = sqlite3.connect(DB_PATH)
+    c.row_factory = sqlite3.Row
+    rows = c.execute("SELECT * FROM write_ledger ORDER BY intent_ts DESC LIMIT 200").fetchall()
+    c.close()
+    return {"items": [dict(r) for r in rows]}
+
+
 @app.get("/bridge/config")
 async def bridge_config(x_bridge_token: str | None = Header(default=None)):
     """插件拉配置：模式（semi/full）、轮询间隔、敏感词（供插件本地预过滤）。"""

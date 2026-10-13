@@ -42,6 +42,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           body: JSON.stringify(msg.payload),
         });
         sendResponse({ ok: true, data });
+      } else if (msg.type === "GET_CONFIRMATIONS") {
+        const data = await api("/bridge/confirmations");
+        sendResponse({ ok: true, data });
+      } else if (msg.type === "BRIDGE_CONFIRM") {
+        const data = await api("/bridge/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ problem_id: msg.problem_id }),
+        });
+        sendResponse({ ok: true, data });
       } else if (msg.type === "GET_CONFIG") {
         const data = await api("/bridge/config");
         sendResponse({ ok: true, data });
@@ -83,6 +93,25 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       chrome.tabs.sendMessage(t.id, { type: "POLL_NOW" }, () => void chrome.runtime.lastError);
     }
   });
+  // 检查工作台已确认的回复 → 下发执行指令
+  try {
+    const conf = await api("/bridge/confirmations");
+    // confirmed 状态的条目需要执行——拉 confirmed 列表
+    const hist = await api("/bridge/history");
+    const toExecute = (hist.items || []).filter(
+      (x) => x.status === "confirmed" && x.confirmed_by === "human:workbench"
+    );
+    for (const item of toExecute) {
+      if (tabs.length) {
+        chrome.tabs.sendMessage(tabs[0].id, {
+          type: "EXECUTE_SUBMIT",
+          problem_id: item.problem_id,
+          reply_text: item.reply_text,
+          desc_hint: item.waybill_no || "",
+        }, (resp) => void chrome.runtime.lastError);
+      }
+    }
+  } catch (e) { /* 服务不可达静默 */ }
 });
 
 // 启动时也注入一次

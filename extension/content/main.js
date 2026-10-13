@@ -136,6 +136,26 @@ function isVisible(el) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+// ---------- 确认提交（工作台确认后，服务端下发指令）----------
+
+async function executeSubmit(replyText) {
+  // 前提：弹窗已开且已填（fillQuickReply 填的）
+  const pop = Array.from(document.querySelectorAll(".el-popover")).find(
+    (p) => p.querySelector(".problem-upload--quick-reply") && isVisible(p)
+  );
+  if (!pop) return { ok: false, error: "popover not visible for submit" };
+  const submitBtn = Array.from(pop.querySelectorAll("button")).find((b) => b.innerText.trim() === "提交");
+  if (!submitBtn) return { ok: false, error: "submit button not found" };
+  const now = Date.now();
+  if (now - lastSendAt < SEND_MIN_INTERVAL_MS) {
+    return { ok: false, error: "rate-limited" };
+  }
+  submitBtn.click();
+  lastSendAt = now;
+  await sleep(2500);
+  return { ok: true, submitted: true, note: "submitted-after-confirm" };
+}
+
 // ---------- 轮询主循环 ----------
 
 async function pollOnce() {
@@ -159,7 +179,11 @@ async function pollOnce() {
       const needle = task.waybill_no || task.desc_hint;
       const link = findQuickReplyLink(needle);
       if (!link) continue;
-      link.click();
+      // el-popover 的 Vue 触发绑在内层元素——点 wrapper 的第一个子元素（实测 wrapper.click() 不弹）
+      const target = link.firstElementChild || link;
+      ['mousedown', 'mouseup', 'click'].forEach(ev => {
+        target.dispatchEvent(new MouseEvent(ev, {bubbles: true, cancelable: true, view: window}));
+      });
       await sleep(800);
       const result = await fillQuickReply(task.reply_text, mode);
       // 4. 回传结果（readback 供服务端判定，submitted 旗子不算数）
@@ -201,6 +225,40 @@ function startPolling() {
 }
 
 startPolling();
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "POLL_NOW") pollOnce();
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "POLL_NOW") {
+    pollOnce();
+  } else if (msg.type === "EXECUTE_SUBMIT") {
+    (async () => {
+      const r = await executeSubmit(msg.reply_text || "");
+      if (r.ok && r.submitted) {
+        // 提交成功 → 回读校验 → 上报 committed
+        const readback = readRowReply(msg.desc_hint || "");
+        await sendToBg({
+          type: "INGEST_RESULT",
+          payload: {
+            problem_id: msg.problem_id,
+            reply_text: msg.reply_text || "",
+            submitted: true,
+            readback: readback || r.note,
+            mode: "semi",
+          },
+        });
+      } else {
+        await sendToBg({
+          type: "INGEST_RESULT",
+          payload: {
+            problem_id: msg.problem_id || "",
+            reply_text: msg.reply_text || "",
+            submitted: false,
+            readback: "",
+            mode: "semi",
+            error: r.error || "submit failed",
+          },
+        });
+      }
+      sendResponse(r);
+    })();
+    return true;
+  }
 });

@@ -52,6 +52,13 @@
   .ai-check.show { display:block; }
   .ai-check .box { background:#fff7e8; border:1px solid #ffe4a0; border-radius:12px; padding:14px 18px;
                    font-size:13px; color:#8f4a00; line-height:1.8; }
+  .confirm-item { display:flex; align-items:center; gap:10px; padding:8px 0;
+                  border-bottom:1px solid #ffe4a0; }
+  .confirm-item:last-child { border-bottom:none; }
+  .confirm-item .txt { flex:1; }
+  .confirm-btn { background:var(--green); color:#fff; border:none; padding:6px 16px;
+                 border-radius:8px; cursor:pointer; font-size:13px; white-space:nowrap; }
+  .confirm-btn:disabled { opacity:.5; }
 </style>
 </head>
 <body>
@@ -66,6 +73,10 @@
   <div class="big-stat">
     <div class="num" id="bigNum">–</div>
     <div class="label" id="bigLabel">还没回的问题件</div>
+  </div>
+
+  <div class="ai-check" id="confirmBox">
+    <div class="box" id="confirmInner"></div>
   </div>
 
   <div class="ai-check" id="aiCheck">
@@ -190,6 +201,34 @@ async function loadBreaker() {
   } catch (e) { /* 静默 */ }
 }
 
+async function loadConfirmations() {
+  try {
+    const r = await (await authedFetch(API + '/bridge/confirmations')).json();
+    const items = r.items || [];
+    const box = document.getElementById('confirmBox');
+    if (!items.length) { box.classList.remove('show'); return; }
+    box.classList.add('show');
+    document.getElementById('confirmInner').innerHTML =
+      '<b>系统已帮您填好 ' + items.length + ' 条回复，请确认后发送：</b>' +
+      items.map(it => `<div class="confirm-item">
+        <div class="txt">${esc((it.reply_text||'').slice(0,40))}</div>
+        <button class="confirm-btn" onclick="confirmSend('${it.problem_id}', this)">确认发送</button>
+      </div>`).join('');
+  } catch (e) { /* 静默 */ }
+}
+
+async function confirmSend(pid, btn) {
+  btn.disabled = true; btn.textContent = '发送中…';
+  try {
+    const r = await (await authedFetch(API + '/bridge/confirm', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({problem_id: pid})
+    })).json();
+    if (r.ok) { toast('已确认，系统正在发送'); loadConfirmations(); }
+    else { toast('失败：' + (r.note||'')); btn.disabled = false; }
+  } catch (e) { toast('错误：' + e.message); btn.disabled = false; }
+}
+
 async function loadRetrospect() {
   try {
     const r = await (await authedFetch(API + '/retrospect/latest')).json();
@@ -207,8 +246,10 @@ setInterval(() => loadList(false), 300000);
 if (!requireCode()) {
   refreshAuto();
   loadList(false);
+  loadConfirmations();
   loadRetrospect();
   loadBreaker();
+  setInterval(loadConfirmations, 60000);
 }
 </script>
 </body>
