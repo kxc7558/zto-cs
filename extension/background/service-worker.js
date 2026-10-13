@@ -55,15 +55,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // async response
 });
 
+// ---- 主动注入 content script（MV3 --load-extension 的声明式注入对已有 tab 不生效）----
+async function ensureInjected(tabId) {
+  return new Promise((resolve) => {
+    // 先探测是否已注入（发个轻量消息）
+    chrome.tabs.sendMessage(tabId, { type: "GET_CONFIG" }, (resp) => {
+      if (chrome.runtime.lastError) {
+        // 未注入 → 主动注入
+        chrome.scripting.executeScript(
+          { target: { tabId }, files: ["content/main.js"] },
+          (results) => resolve(!!results)
+        );
+      } else {
+        resolve(true); // 已注入
+      }
+    });
+  });
+}
+
 // ---- 定时任务：拉任务下发给 content script ----
-// 注：content script 自身在页面加载后轮询；alarm 仅作兜底（页面休眠时）
 chrome.alarms.create("poll-tasks", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== "poll-tasks") return;
-  // 通知活动的 problemQuery 标签页拉任务
-  chrome.tabs.query({ url: ["https://datahub-portlet.zto56.com/*", "https://ws.zto56.com/*"] }, (tabs) => {
+  chrome.tabs.query({ url: ["https://datahub-portlet.zto56.com/*", "https://ws.zto56.com/*"] }, async (tabs) => {
     for (const t of tabs) {
+      await ensureInjected(t.id);
       chrome.tabs.sendMessage(t.id, { type: "POLL_NOW" }, () => void chrome.runtime.lastError);
     }
   });
+});
+
+// 启动时也注入一次
+chrome.tabs.query({ url: ["https://datahub-portlet.zto56.com/*", "https://ws.zto56.com/*"] }, async (tabs) => {
+  for (const t of tabs) await ensureInjected(t.id);
 });

@@ -141,16 +141,15 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 async function pollOnce() {
   try {
     const cfg = await sendToBg({ type: "GET_CONFIG" });
-    if (!cfg.ok || !cfg.data.enabled) return;
 
-    // 1. 读列表并上报
+    // 1. 读列表并上报（**不受开关限制**——off 模式也要上报，工作台才有数据看）
     const rows = readProblemRows();
     if (rows.length > 0) {
-      const ingest = await sendToBg({ type: "INGEST_LIST", rows, page_url: location.href });
-      if (!ingest.ok) return;
+      await sendToBg({ type: "INGEST_LIST", rows, page_url: location.href });
     }
 
-    // 2. 拉任务（服务端已过四层闸门）
+    // 2. 拉任务（仅 enabled 时；服务端已过闸门）
+    if (!cfg.ok || !cfg.data.enabled) return;
     const tasks = await sendToBg({ type: "GET_TASKS", limit: 5 });
     if (!tasks.ok || !tasks.data.tasks || tasks.data.tasks.length === 0) return;
 
