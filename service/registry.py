@@ -11,14 +11,6 @@
 from service.ports import ProblemSource
 
 
-class ExtensionSource:
-    """插件上报的数据源：列表来自 bridge_cache（content script 定期上报）。"""
-
-    async def fetch_parcels(self):
-        from service.bridge_cache import get_latest_parcels
-        return get_latest_parcels()
-
-
 class CdpSource:
     """Playwright 读取的数据源（备胎）：直连调试 Chrome 读 problemQuery 页。"""
 
@@ -28,8 +20,8 @@ class CdpSource:
         return listing.items
 
 
-def get_source(mode: str) -> ProblemSource:
-    return ExtensionSource() if mode == "extension" else CdpSource()
+def get_source(mode: str = "cdp") -> ProblemSource:
+    return CdpSource()
 
 
 async def fetch_current_parcels() -> list:

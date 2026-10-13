@@ -139,31 +139,46 @@ async def pending_tasks(limit: int = 5) -> dict:
 
 
 def pending_confirmations() -> list[dict]:
-    """待确认队列：插件填好等人工确认的回复（工作台展示 + 确认下发）。"""
+    """待确认队列：已填好等人工确认的回复（工作台展示 + 确认下发）。
+    confirmed_by 以 cdp:/extension: 开头的都算（摒弃插件后只有 cdp）。"""
     with _conn() as c:
         rows = c.execute(
-            "SELECT * FROM write_ledger WHERE status='pending' AND confirmed_by='extension:semi'"
+            "SELECT * FROM write_ledger WHERE status='pending' AND confirmed_by LIKE 'cdp:%'"
             " ORDER BY intent_ts").fetchall()
         return [dict(r) for r in rows]
 
 
-def confirm_and_dispatch(problem_id: str, confirmed_by: str) -> dict:
-    """工作台确认：pending → confirmed（待插件执行提交指令）。返回指令内容。"""
+async def confirm_and_dispatch(problem_id: str, confirmed_by: str) -> dict:
+    """工作台确认：pending → 确认 → CDP 直驱点提交 → 回读 → 落账。"""
     rows = ledger.get_by_problem(problem_id)
     row = next((x for x in rows if x["status"] == "pending"), None)
     if not row:
         return {"ok": False, "note": "no pending row"}
+    # CDP 直驱：点提交 + 回读校验
+    from service.cdp_driver import submit_reply
+    result = await submit_reply(desc_hint=row.get("waybill_no") or "", reply_text=row["reply_text"])
     now = datetime.now().isoformat(timespec="seconds")
     c = _conn()
-    c.execute("UPDATE write_ledger SET status='confirmed', result_ts=?, confirmed_by=? WHERE id=?",
-              (now, confirmed_by, row["id"]))
-    c.commit()
-    audit.append("bridge_reply_confirmed", {
-        "problem_id": problem_id, "confirmed_by": confirmed_by,
-        "reply_text": row["reply_text"][:80],
-    }, actor=confirmed_by)
-    return {"ok": True, "action": "execute_submit",
-            "problem_id": problem_id, "reply_text": row["reply_text"]}
+    if result.get("ok"):
+        c.execute("UPDATE write_ledger SET status='committed', result_ts=?, confirmed_by=?,"
+                  " platform_receipt=? WHERE id=?",
+                  (now, confirmed_by, (result.get("readback") or "")[:200], row["id"]))
+        c.commit()
+        audit.append("bridge_reply_committed", {
+            "problem_id": problem_id, "confirmed_by": confirmed_by,
+            "readback": (result.get("readback") or "")[:120], "verified": True,
+        }, actor=confirmed_by)
+        from db.metrics import record_committed
+        record_committed(problem_id)
+        return {"ok": True, "note": "committed (verified)", "readback": result.get("readback")}
+    else:
+        c.execute("UPDATE write_ledger SET status='unknown', result_ts=?, confirmed_by=? WHERE id=?",
+                  (now, confirmed_by, row["id"]))
+        c.commit()
+        audit.append("bridge_reply_unknown", {
+            "problem_id": problem_id, "error": (result.get("error") or "")[:80],
+        }, actor=confirmed_by)
+        return {"ok": False, "note": result.get("error") or "submit failed"}
 
 
 def _conn():

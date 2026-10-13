@@ -11,6 +11,8 @@ review CRITICAL-1 修复：旧版 run_auto_reply 自建计划（只查开关+敏
 
 敏感类硬闸在 gatekeeper ②（不受任何开关影响）。
 """
+import asyncio
+
 from service import gatekeeper
 from service.registry import get_source
 from shared import audit
@@ -48,3 +50,48 @@ def plan_auto_replies(items: list[dict]) -> dict:
                      "verdict": "human" if sensitive else "auto"})
     return {"auto": [p for p in plan if p["verdict"] == "auto"],
             "human": [p for p in plan if p["verdict"] == "human"]}
+
+
+async def run_auto_reply(max_n: int = 3) -> dict:
+    """执行一轮自动回复（semi）：拉数据 → 闸门 → CDP 填弹窗 → 停在工作台等确认。"""
+    from service.gatekeeper import run_gates
+    from service.registry import fetch_current_parcels
+    from service.cdp_driver import fill_reply
+    from db import ledger
+    from db.metrics import record_first_seen
+
+    mode = get_mode()
+    if mode == "off":
+        return {"ok": False, "note": "auto reply off"}
+
+    parcels = await fetch_current_parcels()
+    filled = 0
+    for p in parcels:
+        if filled >= max_n:
+            break
+        gate = await run_gates(p, switches={"auto_enabled": True})
+        if not gate.passed:
+            continue
+        key = ledger.make_idempotency_key(p.problem_id, "reply", gate.reply_text,
+                                          confirmed_by=f"cdp:{mode}")
+        existing = ledger.get_status(key)
+        if existing and existing["status"] in ("committed", "pending", "confirmed", "unknown"):
+            continue
+        ledger.record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
+                             key, auto=False, confirmed_by=f"cdp:{mode}", ptype=p.ptype or "")
+        record_first_seen(p.problem_id, p.ptype or "")
+        r = await fill_reply(desc_hint=(p.description or "")[:20], reply_text=gate.reply_text)
+        if r.get("ok"):
+            filled += 1
+        elif "no quick-reply entry" in (r.get("error") or ""):
+            # 该类型无页面入口——转人工（从账本删掉意图，人工处理）
+            import sqlite3
+            from shared.config import DB_PATH
+            c = sqlite3.connect(DB_PATH)
+            key = ledger.make_idempotency_key(p.problem_id, "reply", gate.reply_text,
+                                              confirmed_by=f"cdp:{mode}")
+            wid = __import__('uuid').uuid5(__import__('uuid').NAMESPACE_URL, key).hex[:16]
+            c.execute("DELETE FROM write_ledger WHERE id=?", (wid,))
+            c.commit(); c.close()
+        await asyncio.sleep(5)
+    return {"ok": True, "filled": filled, "mode": mode}
