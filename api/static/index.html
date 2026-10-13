@@ -89,6 +89,18 @@ function authHeaders() {
   return t ? { 'X-Read-Token': t, 'X-Bridge-Token': t } : {};
 }
 
+// 统一带鉴权的 fetch：401 时清码重新输（不再刷一堆 console 错）
+async function authedFetch(url, opts = {}) {
+  const r = await fetch(url, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+  if (r.status === 401) {
+    localStorage.removeItem('accessCode');
+    if (requireCode()) throw new Error('need access code');
+    // 重试一次
+    return fetch(url, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+  }
+  return r;
+}
+
 function requireCode() {
   if (getToken()) return false;
   const code = prompt('首次使用：请输入访问码（管理员提供的密钥）');
@@ -111,7 +123,7 @@ function toast(msg) {
 
 async function refreshAuto() {
   try {
-    const s = await (await fetch(API + '/auto-reply/status', {headers: authHeaders()})).json();
+    const s = await (await authedFetch(API + '/auto-reply/status')).json();
     document.getElementById('autoSwitch').classList.toggle('on', s.enabled);
   } catch (e) {
     // 只读页（8766）没有开关端点——隐藏开关（开关在装机终端的 8765 页面）
@@ -120,11 +132,11 @@ async function refreshAuto() {
 }
 
 async function toggleAuto() {
-  const s = await (await fetch(API + '/auto-reply/status', {headers: authHeaders()})).json();
+  const s = await (await authedFetch(API + '/auto-reply/status')).json();
   const next = !s.enabled;
   if (next && !confirm('开启后，系统会帮您把回复写好。\n最后一步（点发送）还是您来确认。\n\n要开启吗？')) return;
-  const r = await (await fetch(API + '/auto-reply/toggle', {
-    method:'POST', headers:{...authHeaders(), 'Content-Type':'application/json'},
+  const r = await (await authedFetch(API + '/auto-reply/toggle', {
+    method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({enabled: next})
   })).json();
   if (r.ok) { toast(next ? '已开启' : '已关闭'); refreshAuto(); }
@@ -134,20 +146,7 @@ async function loadList(force) {
   const box = document.getElementById('list');
   box.innerHTML = '<div class="empty">加载中…</div>';
   try {
-    let data;
-    try {
-      data = await (await fetch(API + '/problem-parcels' + (force ? '?force=true' : ''), {headers: authHeaders()})).json();
-      if (data.detail && data.detail.includes('auth')) {
-        localStorage.removeItem('accessCode');
-        requireCode();
-        return loadList(force);
-      }
-    } catch (err) {
-      // 401 会 throw
-      localStorage.removeItem('accessCode');
-      requireCode();
-      return;
-    }
+    const data = await (await authedFetch(API + '/problem-parcels' + (force ? '?force=true' : ''))).json();
     const items = data.items || [];
     const wait = items.filter(i => !i.latest_reply).length;
     // 大数字：还有几件没回
@@ -182,7 +181,7 @@ async function loadList(force) {
 
 async function loadBreaker() {
   try {
-    const b = await (await fetch(API + '/breaker/status', {headers: authHeaders()})).json();
+    const b = await (await authedFetch(API + '/breaker/status')).json();
     if (b.tripped) {
       const el = document.getElementById('breakerNote');
       el.style.display = 'block';
@@ -193,7 +192,7 @@ async function loadBreaker() {
 
 async function loadRetrospect() {
   try {
-    const r = await (await fetch(API + '/retrospect/latest', {headers: authHeaders()})).json();
+    const r = await (await authedFetch(API + '/retrospect/latest')).json();
     const flagged = (r.flagged || []).length;
     if (flagged > 0) {
       const box = document.getElementById('aiCheck');
