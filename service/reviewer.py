@@ -65,7 +65,13 @@ async def _call_local_model(prompt: str) -> str:
 
 def _build_prompt(ptype: str, description: str, reply_text: str,
                   outlet_from: str, outlet_notify: str) -> str:
+    # 话术知识库注入（LLM-wiki：按类型检索小节，给 AI 口径与参考话术）
+    from service.wiki import context_for_review
+    knowledge = context_for_review(ptype)
     return f"""你是物流网点的回复审核员。判断下面这条自动回复是否合适，只输出 JSON。
+
+【该类型话术知识】
+{knowledge}
 
 问题件类型：{ptype}
 问题描述：{description[:200]}
