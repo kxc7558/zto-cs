@@ -56,7 +56,7 @@ async def run_auto_reply(max_n: int = 3) -> dict:
     """执行一轮自动回复（semi）：拉数据 → 闸门 → CDP 填弹窗 → 停在工作台等确认。"""
     from service.gatekeeper import run_gates
     from service.registry import fetch_current_parcels
-    from service.cdp_driver import fill_reply
+    from service.cdp_driver import fill_for_confirm
     from db import ledger
     from db.metrics import record_first_seen
 
@@ -80,11 +80,25 @@ async def run_auto_reply(max_n: int = 3) -> dict:
         ledger.record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
                              key, auto=False, confirmed_by=f"cdp:{mode}", ptype=p.ptype or "")
         record_first_seen(p.problem_id, p.ptype or "")
-        r = await fill_reply(desc_hint=(p.description or "")[:20], reply_text=gate.reply_text)
+        from service.cdp_driver import fill_for_confirm
+        # 行锚：运单号优先（唯一）→ 创建人+登记时间（唯一）→ 类型+描述（ambiguous 转人工）
+        hint2 = ""
+        if p.waybill_no:
+            hint = p.waybill_no
+        elif p.creator and p.created_at:
+            # 双锚：创建人 + 登记时间（JS 里两个 includes 都要满足）
+            hint = p.creator
+            hint2 = p.created_at[:10]
+        else:
+            hint = (p.description or "")[:15]
+        r = await fill_for_confirm(hint=hint, hint2=hint2, reply_text=gate.reply_text)
         if r.get("ok"):
             filled += 1
-        elif "no quick-reply entry" in (r.get("error") or ""):
-            # 该类型无页面入口——转人工（从账本删掉意图，人工处理）
+        else:
+            # 填失败（行不在当前页/无入口）→ 审计记录错误 + 删意图转人工
+            from shared import audit as _a
+            _a.append("fill_failed", {"problem_id": p.problem_id[:12],
+                                      "error": (r.get("error") or "")[:80]}, actor="auto-reply")
             import sqlite3
             from shared.config import DB_PATH
             c = sqlite3.connect(DB_PATH)

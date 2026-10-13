@@ -8,7 +8,15 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
+
+from shared import bridge_auth
+
+
+def _auth(token: str | None) -> None:
+    """桥接鉴权：共享密钥校验（X-Bridge-Token）。"""
+    if not bridge_auth.verify(token):
+        raise HTTPException(status_code=401, detail="bridge auth failed")
 from pydantic import BaseModel
 
 from service import problem_reader, rules, auto_reply, replier
@@ -239,60 +247,6 @@ async def reply_ledger(problem_id: str):
 # 分工：插件=手（只做页面里的读和写），服务端=脑（决策/审核/留痕）。
 # 插件不做任何决策：回什么、能不能回，全由服务端定。
 
-class BridgeIngestList(BaseModel):
-    """插件上报的问题件列表（content script 从页面读出的原始行）。"""
-    rows: list[dict]
-    page_url: str | None = None
-
-
-# 鉴权：共享密钥（X-Bridge-Token），本机 127.0.0.1 + 密钥双保险
-from shared import bridge_auth
-from fastapi import Header
-
-
-def _auth(token: str | None) -> None:
-    if not bridge_auth.verify(token):
-        raise HTTPException(status_code=401, detail="bridge auth failed")
-
-
-@app.post("/bridge/ingest/list")
-async def bridge_ingest_list(body: BridgeIngestList, x_bridge_token: str | None = Header(default=None)):
-    """插件上报列表 → 服务端去重建档、跑闸门计划，返回统计。"""
-    _auth(x_bridge_token)
-    from service.bridge import ingest_rows
-    result = await ingest_rows(body.rows, body.page_url)
-    return result
-
-
-@app.get("/bridge/tasks/pending")
-async def bridge_tasks_pending(limit: int = 5, x_bridge_token: str | None = Header(default=None)):
-    """插件轮询：该回哪条、用什么话术（已过四层闸门）。下发时落意图账本。"""
-    _auth(x_bridge_token)
-    from service.bridge import pending_tasks
-    return await pending_tasks(limit=limit)
-
-
-class BridgeIngestResult(BaseModel):
-    """插件回传提交结果。"""
-    problem_id: str
-    reply_text: str
-    submitted: bool
-    readback: str | None = None
-    mode: str = "semi"          # semi / full
-    error: str | None = None
-
-
-@app.post("/bridge/ingest/result")
-async def bridge_ingest_result(body: BridgeIngestResult, x_bridge_token: str | None = Header(default=None)):
-    """插件回传结果 → 服务端落账本、审计、回读校验。"""
-    _auth(x_bridge_token)
-    from service.bridge import ingest_result
-    return await ingest_result(
-        problem_id=body.problem_id, reply_text=body.reply_text,
-        submitted=body.submitted, readback=body.readback or "",
-        mode=body.mode, error=body.error,
-    )
-
 
 @app.get("/bridge/confirmations")
 async def bridge_confirmations(x_bridge_token: str | None = Header(default=None)):
@@ -311,7 +265,12 @@ async def bridge_confirm(body: BridgeConfirm, x_bridge_token: str | None = Heade
     """工作台确认发送：pending → confirmed，返回提交指令（插件执行）。"""
     _auth(x_bridge_token)
     from service.bridge import confirm_and_dispatch
-    return confirm_and_dispatch(body.problem_id, confirmed_by="human:workbench")
+    # CDP 提交是长任务（可能 30s+）——后台执行，HTTP 立即返回（前端轮询账本状态）
+    import asyncio
+    task = asyncio.create_task(confirm_and_dispatch(body.problem_id, confirmed_by="human:workbench"))
+    _state.setdefault("bg_tasks", []).append(task)  # 持引用防 GC
+    task.add_done_callback(lambda t: _state["bg_tasks"].remove(t) if t in _state.get("bg_tasks", []) else None)
+    return {"ok": True, "note": "submitting in background — 刷新列表查看结果"}
 
 
 @app.get("/bridge/history")
