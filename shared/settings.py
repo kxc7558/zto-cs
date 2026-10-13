@@ -1,9 +1,12 @@
 """写配置（自动回复开关等）。settings.yaml 读写。"""
+import threading
 from pathlib import Path
 
 import yaml
 
 from shared.config import ROOT
+
+_lock = threading.Lock()
 
 SETTINGS_PATH = ROOT / "config" / "settings.yaml"
 
@@ -25,14 +28,15 @@ def get(path: str, default=None):
 
 
 def set_value(path: str, value) -> dict:
-    """按点路径写值并落盘，返回更新后的全量配置。"""
-    cfg = load()
-    node = cfg
-    parts = path.split(".")
-    for p in parts[:-1]:
-        node = node.setdefault(p, {})
-    node[parts[-1]] = value
-    SETTINGS_PATH.write_text(
-        yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8"
-    )
+    """按点路径写值并落盘（M6：锁内完成，防并发写坏 YAML）。返回更新后的全量配置。"""
+    with _lock:
+        cfg = load()
+        node = cfg
+        parts = path.split(".")
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+        node[parts[-1]] = value
+        SETTINGS_PATH.write_text(
+            yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
     return cfg

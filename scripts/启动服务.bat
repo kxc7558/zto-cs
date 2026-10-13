@@ -19,5 +19,5 @@ echo [ZTO-CS] 启动服务...
 echo   本机工作台：   http://127.0.0.1:8765
 echo   局域网只读页： http://本机IP:8766 （其他客服查看用）
 start "" http://127.0.0.1:8765
-.venv\Scripts\python -m uvicorn api.main:app --host 127.0.0.1 --port 8765
+.venv\Scripts\python scripts\start_all.py
 pause

@@ -10,3 +10,4 @@ config/VERSION
 bak/
 update-server/data/
 *.key
+!db/*.py
