@@ -84,7 +84,7 @@ async def test_gate_already_replied_blocks():
 async def test_gate_no_template_blocks():
     p = _parcel(ptype="不存在的类型")
     p.category = "也不存在"
-    r = await run_gates(p, switches={"auto_enabled": True}, reviewer_impl=FakeReviewer())
+    r = await run_gates(p, switches={"auto_enabled": True})
     assert not r.passed
     assert r.gate == "rules"
 
@@ -110,28 +110,22 @@ async def test_rule_validate_sensitive_text():
 # ---------- 闸门④：AI 审核 ----------
 
 @pytest.mark.asyncio
-async def test_gate_ai_human_blocks():
-    r = await run_gates(_parcel(), switches={"auto_enabled": True},
-                        reviewer_impl=FakeReviewer(verdict="human"))
-    assert not r.passed
-    assert r.gate == "ai_review"
-
-
-@pytest.mark.asyncio
-async def test_gate_ai_pass_allows():
-    fr = FakeReviewer(verdict="pass")
-    r = await run_gates(_parcel(), switches={"auto_enabled": True}, reviewer_impl=fr)
+async def test_gate_no_ai_in_path():
+    """AI 后置后，闸门全确定性：run_gates 无 AI 调用（毫秒级）。"""
+    import time
+    t0 = time.time()
+    r = await run_gates(_parcel(), switches={"auto_enabled": True})
+    elapsed = time.time() - t0
     assert r.passed
-    assert r.reply_text  # 有模板话术
+    assert elapsed < 0.1  # 无 LLM 调用，必须毫秒级
 
 
 # ---------- 人工确认路径（跳过①④，但②③仍拦） ----------
 
 @pytest.mark.asyncio
-async def test_gate_human_confirmed_skips_switch_and_ai():
-    r = await run_gates(_parcel(), switches={"auto_enabled": False}, human_confirmed=True,
-                        reviewer_impl=FakeReviewer(verdict="human"))
-    assert r.passed  # 人工确认：开关关着也放行，AI human 也不拦
+async def test_gate_human_confirmed_skips_switch():
+    r = await run_gates(_parcel(), switches={"auto_enabled": False}, human_confirmed=True)
+    assert r.passed  # 人工确认：开关关着也放行
 
 
 @pytest.mark.asyncio

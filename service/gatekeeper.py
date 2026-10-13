@@ -1,20 +1,19 @@
 """闸门管线：一条回复从"拟生成"到"放行执行"的全部检查。
 
-模块化设计：管线只认 ProblemParcel + 回复文本，不认数据源/执行通道。
-四层闸门（缺一不放行）：
+**AI 已后置（用户拍板：AI 不能前置阻塞提交路径）**——闸门全确定性：
   ① 总开关（write.enabled + auto_reply.enabled）
   ② 敏感类硬闸（仲裁/理赔/责任/费用——代码强制，不受开关影响）
   ③ 模板匹配 + 确定性规则校验（必填/长度/敏感词）
-  ④ AI 审核（本机模型，fail-safe 转人工）
 
-任何一层不过 → 返回不放行 + 理由 + 停在哪层。执行通道拿到的是"已过全部闸门"的回复。
+任何一层不过 → 不放行 + 理由 + 停在哪层。全部毫秒级，无 LLM 调用。
+AI 审核挪到**事后批量抽查**（service/retrospect.py）：只报告不动数据。
 
-**所有写路径必须经过本管线**——包括人工单条回复（/reply/prepare+commit）。
-人工路径与自动路径的差异只在①（人工确认代替总开关）与④（人工已审，AI 审核可跳过）。
+所有写路径必须经过本管线——包括人工单条回复。
+人工路径与自动路径的差异只在①（人工确认代替总开关）。
 """
 from dataclasses import dataclass
 
-from service import rules, reviewer
+from service import rules
 from shared import audit
 from shared.models import ProblemParcel
 
@@ -28,12 +27,11 @@ class GateResult:
 
 
 async def run_gates(parcel: ProblemParcel, switches: dict,
-                    reviewer_impl=None, human_confirmed: bool = False) -> GateResult:
-    """跑全部闸门。
+                    human_confirmed: bool = False) -> GateResult:
+    """跑全部闸门（全确定性，无 AI）。
 
     switches: {auto_enabled: bool}
-    human_confirmed: True 表示人工已看预览点过确认（①由人代替；④人工已审可跳过）。
-    reviewer_impl 可注入（测试用）。
+    human_confirmed: True 表示人工已看预览点过确认（①由人代替）。
     """
     # ① 总开关（人工确认可代替）
     if not human_confirmed and not switches.get("auto_enabled"):
@@ -52,16 +50,6 @@ async def run_gates(parcel: ProblemParcel, switches: dict,
     ok, why = rules.validate_reply(text or "")
     if not ok:
         return GateResult(False, None, f"rule-invalid:{why}", "rules")
-
-    # ④ AI 审核（人工确认路径跳过——人已审；自动路径 fail-safe：故障 → human）
-    if not human_confirmed:
-        impl = reviewer_impl or reviewer.AiReviewer()
-        review = await impl.review_reply(
-            ptype=parcel.ptype or "", description=parcel.description or "",
-            reply_text=text, outlet_from=parcel.outlet_from or "", outlet_notify=parcel.outlet_notify or "",
-        )
-        if review.get("verdict") != "pass":
-            return GateResult(False, None, f"ai-review:{review.get('reason', 'human')}", "ai_review")
 
     audit.append("gates_passed", {"problem_id": parcel.problem_id, "ptype": parcel.ptype,
                                   "human": human_confirmed})

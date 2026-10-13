@@ -23,9 +23,21 @@ _state: dict = {"reader": None, "cache": None, "cache_ts": None}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _state["reader"] = problem_reader
-    # 远程更新轮询（后台任务，10 分钟一次；服务器不可达静默跳过）
+    # AI 后置分析（每小时批量审已提交回复，只报告不动数据）
     import asyncio
 
+    async def retrospect_poller():
+        from service.retrospect import run_retrospect
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await run_retrospect()
+            except Exception:
+                pass
+
+    _state["retrospect_task"] = asyncio.create_task(retrospect_poller())
+
+    # 远程更新轮询（后台任务，10 分钟一次；服务器不可达静默跳过）
     async def update_poller():
         from service.updater import poll_and_apply
         from shared import audit as _a
@@ -41,13 +53,14 @@ async def lifespan(app: FastAPI):
 
     _state["update_task"] = asyncio.create_task(update_poller())
     yield
-    task = _state.get("update_task")
-    if task:
-        task.cancel()
-        try:
-            await task  # review MEDIUM-7：cancel 要 await
-        except asyncio.CancelledError:
-            pass
+    for k in ("update_task", "retrospect_task"):
+        task = _state.get(k)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title="ZTO 客服智助 · 问题件回复闭环", lifespan=lifespan)
@@ -295,6 +308,23 @@ async def bridge_config(x_bridge_token: str | None = Header(default=None)):
         "enabled": auto_reply.get_mode() != "off",
         "mode": auto_reply.get_mode(),
     }
+
+
+@app.post("/retrospect/run")
+async def retrospect_run():
+    """手动触发一轮 AI 后置分析（工作台调用）。"""
+    from service.retrospect import run_retrospect
+    try:
+        return await run_retrospect()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"retrospect failed: {e}")
+
+
+@app.get("/retrospect/latest")
+async def retrospect_latest():
+    """读最近一次后置分析结果（工作台展示）。"""
+    from service.retrospect import latest_retrospect
+    return latest_retrospect()
 
 
 @app.get("/bridge/fingerprint")
