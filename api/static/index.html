@@ -81,6 +81,25 @@
 <script>
 const API = location.origin;
 
+// 访问码：首次输入一次，存 localStorage，之后自动带（X-Read-Token / X-Bridge-Token 均可）
+function getToken() { return localStorage.getItem('accessCode') || ''; }
+
+function authHeaders() {
+  const t = getToken();
+  return t ? { 'X-Read-Token': t, 'X-Bridge-Token': t } : {};
+}
+
+function requireCode() {
+  if (getToken()) return false;
+  const code = prompt('首次使用：请输入访问码（管理员提供的密钥）');
+  if (code && code.trim()) {
+    localStorage.setItem('accessCode', code.trim());
+    return false; // 已存，继续
+  }
+  document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#86909c;font-size:15px">需要访问码才能使用。请刷新页面重新输入。</div>';
+  return true;
+}
+
 function esc(s) { return (s||'').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -91,16 +110,21 @@ function toast(msg) {
 }
 
 async function refreshAuto() {
-  const s = await (await fetch(API + '/auto-reply/status')).json();
-  document.getElementById('autoSwitch').classList.toggle('on', s.enabled);
+  try {
+    const s = await (await fetch(API + '/auto-reply/status', {headers: authHeaders()})).json();
+    document.getElementById('autoSwitch').classList.toggle('on', s.enabled);
+  } catch (e) {
+    // 只读页（8766）没有开关端点——隐藏开关（开关在装机终端的 8765 页面）
+    document.querySelector('.auto-box').style.display = 'none';
+  }
 }
 
 async function toggleAuto() {
-  const s = await (await fetch(API + '/auto-reply/status')).json();
+  const s = await (await fetch(API + '/auto-reply/status', {headers: authHeaders()})).json();
   const next = !s.enabled;
   if (next && !confirm('开启后，系统会帮您把回复写好。\n最后一步（点发送）还是您来确认。\n\n要开启吗？')) return;
   const r = await (await fetch(API + '/auto-reply/toggle', {
-    method:'POST', headers:{'Content-Type':'application/json'},
+    method:'POST', headers:{...authHeaders(), 'Content-Type':'application/json'},
     body: JSON.stringify({enabled: next})
   })).json();
   if (r.ok) { toast(next ? '已开启' : '已关闭'); refreshAuto(); }
@@ -110,7 +134,20 @@ async function loadList(force) {
   const box = document.getElementById('list');
   box.innerHTML = '<div class="empty">加载中…</div>';
   try {
-    const data = await (await fetch(API + '/problem-parcels' + (force ? '?force=true' : ''))).json();
+    let data;
+    try {
+      data = await (await fetch(API + '/problem-parcels' + (force ? '?force=true' : ''), {headers: authHeaders()})).json();
+      if (data.detail && data.detail.includes('auth')) {
+        localStorage.removeItem('accessCode');
+        requireCode();
+        return loadList(force);
+      }
+    } catch (err) {
+      // 401 会 throw
+      localStorage.removeItem('accessCode');
+      requireCode();
+      return;
+    }
     const items = data.items || [];
     const wait = items.filter(i => !i.latest_reply).length;
     // 大数字：还有几件没回
@@ -139,13 +176,13 @@ async function loadList(force) {
       </div>`;
     }).join('');
   } catch (e) {
-    box.innerHTML = `<div class="empty">加载失败，请确认中通网页已登录</div>`;
+    box.innerHTML = `<div class="empty">加载失败：${esc(e.message)}<br>若提示需要访问码，请刷新页面重新输入</div>`;
   }
 }
 
 async function loadBreaker() {
   try {
-    const b = await (await fetch(API + '/breaker/status')).json();
+    const b = await (await fetch(API + '/breaker/status', {headers: authHeaders()})).json();
     if (b.tripped) {
       const el = document.getElementById('breakerNote');
       el.style.display = 'block';
@@ -156,7 +193,7 @@ async function loadBreaker() {
 
 async function loadRetrospect() {
   try {
-    const r = await (await fetch(API + '/retrospect/latest')).json();
+    const r = await (await fetch(API + '/retrospect/latest', {headers: authHeaders()})).json();
     const flagged = (r.flagged || []).length;
     if (flagged > 0) {
       const box = document.getElementById('aiCheck');
@@ -168,10 +205,12 @@ async function loadRetrospect() {
 }
 
 setInterval(() => loadList(false), 300000);
-refreshAuto();
-loadList(false);
-loadRetrospect();
-loadBreaker();
+if (!requireCode()) {
+  refreshAuto();
+  loadList(false);
+  loadRetrospect();
+  loadBreaker();
+}
 </script>
 </body>
 </html>
