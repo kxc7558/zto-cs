@@ -30,3 +30,11 @@ class CdpSource:
 
 def get_source(mode: str) -> ProblemSource:
     return ExtensionSource() if mode == "extension" else CdpSource()
+
+
+async def fetch_current_parcels() -> list:
+    """按配置 source_mode 拉当前问题件（公共入口：主站/只读/闸门管线都用它）。"""
+    from shared import settings as cfg
+    mode = cfg.get("write.source_mode", "extension")
+    source = get_source(mode)
+    return await source.fetch_parcels()

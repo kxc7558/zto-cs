@@ -33,11 +33,11 @@ async def health():
 @ro_app.get("/problem-parcels")
 async def list_parcels(x_read_token: str | None = Header(default=None)):
     _auth(x_read_token)
-    # H1：独立进程——数据从 bridge_cache 文件读（8765 进程的插件上报会写这个文件）
-    from service.bridge_cache import get_latest_parcels
-    parcels = get_latest_parcels()
+    # 数据源按 source_mode 路由（cdp: 服务端 Playwright 自己拉；extension: 插件上报的缓存）
+    from service.registry import fetch_current_parcels
+    parcels = await fetch_current_parcels()
     if not parcels:
-        raise HTTPException(status_code=502, detail="暂无数据（插件上报约1分钟一轮）")
+        raise HTTPException(status_code=502, detail="暂无数据（请确认中通页面已登录并点过查询）")
     items = [json.loads(p.model_dump_json()) for p in parcels]
     return {"total": len(items), "items": items, "scanned_at": datetime.now().isoformat(timespec="seconds")}
 

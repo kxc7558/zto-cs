@@ -1,5 +1,6 @@
 write:
   enabled: false
+  source_mode: cdp
   auto_reply:
     enabled: true
     mode: semi

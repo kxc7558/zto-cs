@@ -158,9 +158,23 @@ async function executeSubmit(replyText) {
 
 // ---------- 轮询主循环 ----------
 
+// 点击「查询」刷新数据（中通页面数据不会自动刷新，轮询前必须点）
+async function clickQuery() {
+  const btn = Array.from(document.querySelectorAll("button")).find(
+    (b) => b.innerText.trim() === "查询"
+  );
+  if (!btn) return false;
+  btn.click();
+  await sleep(4000); // 等表格刷新（vxe-table 渲染）
+  return true;
+}
+
 async function pollOnce() {
   try {
     const cfg = await sendToBg({ type: "GET_CONFIG" });
+
+    // 0. 先点「查询」刷新数据（中通页面数据不自动刷新）
+    await clickQuery();
 
     // 1. 读列表并上报（**不受开关限制**——off 模式也要上报，工作台才有数据看）
     const rows = readProblemRows();
