@@ -6,8 +6,8 @@ review CRITICAL-1 修复：旧版 run_auto_reply 自建计划（只查开关+敏
 
 模式（三层）：
 - off：只生成建议（工作台展示），不写
-- semi：闸门通过后下发任务给插件，插件填弹窗、人工点提交
-- full：闸门通过后插件自动提交（限速）
+- semi：闸门通过后 CDP 填弹窗，人工在工作台点确认再提交
+- full：闸门通过后 CDP 自动提交（限速）
 
 敏感类硬闸在 gatekeeper ②（不受任何开关影响）。
 """
@@ -75,23 +75,29 @@ async def run_auto_reply(max_n: int = 3) -> dict:
         key = ledger.make_idempotency_key(p.problem_id, "reply", gate.reply_text,
                                           confirmed_by=f"cdp:{mode}")
         existing = ledger.get_status(key)
-        if existing and existing["status"] in ("committed", "pending", "confirmed", "unknown"):
+        # committing 也跳过：正在提交的行不得被再次填弹窗
+        if existing and existing["status"] in ("committed", "pending", "confirmed",
+                                               "unknown", "committing"):
             continue
-        ledger.record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
-                             key, auto=False, confirmed_by=f"cdp:{mode}", ptype=p.ptype or "")
-        record_first_seen(p.problem_id, p.ptype or "")
-        from service.cdp_driver import fill_for_confirm
-        # 行锚：运单号优先（唯一）→ 创建人+登记时间（唯一）→ 类型+描述（ambiguous 转人工）
+        # 行锚：运单号优先（唯一）→ 创建人+登记时间（唯一）→ 类型/描述（ambiguous 转人工）
+        # 先算锚，落进账本，工作台确认时复用同一锚（避免确认路径重新猜锚对不上行）
         hint2 = ""
         if p.waybill_no:
             hint = p.waybill_no
         elif p.creator and p.created_at:
-            # 双锚：创建人 + 登记时间（JS 里两个 includes 都要满足）
             hint = p.creator
             hint2 = p.created_at[:10]
         else:
             hint = (p.description or "")[:15]
-        r = await fill_for_confirm(hint=hint, hint2=hint2, reply_text=gate.reply_text)
+        ledger.record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
+                             key, auto=False, confirmed_by=f"cdp:{mode}", ptype=p.ptype or "",
+                             anchor=hint, anchor2=hint2)
+        record_first_seen(p.problem_id, p.ptype or "")
+        from service.cdp_driver import fill_for_confirm
+        try:
+            r = await fill_for_confirm(hint=hint, hint2=hint2, reply_text=gate.reply_text)
+        except Exception as e:  # noqa: BLE001 — 填弹窗抛异常也必须回撤意图，否则永久卡一条假 pending
+            r = {"ok": False, "error": f"fill raised: {str(e)[:120]}"}
         if r.get("ok"):
             filled += 1
         else:
@@ -99,13 +105,6 @@ async def run_auto_reply(max_n: int = 3) -> dict:
             from shared import audit as _a
             _a.append("fill_failed", {"problem_id": p.problem_id[:12],
                                       "error": (r.get("error") or "")[:80]}, actor="auto-reply")
-            import sqlite3
-            from shared.config import DB_PATH
-            c = sqlite3.connect(DB_PATH)
-            key = ledger.make_idempotency_key(p.problem_id, "reply", gate.reply_text,
-                                              confirmed_by=f"cdp:{mode}")
-            wid = __import__('uuid').uuid5(__import__('uuid').NAMESPACE_URL, key).hex[:16]
-            c.execute("DELETE FROM write_ledger WHERE id=?", (wid,))
-            c.commit(); c.close()
+            ledger.delete_intent(key)
         await asyncio.sleep(5)
     return {"ok": True, "filled": filled, "mode": mode}

@@ -20,9 +20,10 @@ from signing import sign_payload
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLISH_KEY = Path.home() / ".zto-cs-publish.key"
-WHITELIST = ["config", "service", "shared", "extension", "api"]
+WHITELIST = ["config", "service", "shared", "api", "db"]
 SKIP = {"__pycache__", ".venv", "node_modules", "bridge_secret.key", "machine_id",
-        "VERSION", "update_pubkey.py"}  # 信任根/凭证不进更新包
+        "VERSION", "update_pubkey.py", "access_code.txt",
+        "zto-cs.db", "bridge_cache.json", "metrics.json"}  # 信任根/凭证/业务数据不进更新包
 
 
 def collect_files() -> dict:

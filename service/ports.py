@@ -1,9 +1,9 @@
 """数据源端口（Protocol）：谁提供问题件列表，谁执行回复。
 
 模块化设计（便于拓展）：
-- 数据源：ExtensionSource（插件上报，当前）/ CdpSource（Playwright 读取，备胎）
+- 数据源：CdpSource（Playwright 读取 problemQuery 页，当前）
   → 将来官方 API 开放，加 ApiSource 即可，闸门管线与执行通道零改动。
-- 执行通道：ExtensionExecutor（插件填弹窗，当前）/ CdpExecutor（Playwright 提交，备胎）
+- 执行通道：CDP 直驱（service/cdp_driver，填弹窗/提交/回读，当前）
   → 换通道不动闸门。
 
 闸门管线（gatekeeper.py）与端口解耦：管子只认 ProblemParcel 和 WriteIntent。

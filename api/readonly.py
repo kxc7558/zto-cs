@@ -3,7 +3,7 @@
 Q6 决议：写接口只在 127.0.0.1:8765（装机终端）；本入口不含任何写路由。
 review 修复：
 - H1：独立进程读不到主 app 内存缓存 → 数据直接从 bridge_cache 文件读（跨进程）
-- H2：所有端点加鉴权（只读 token = 桥接密钥）
+- H2：所有端点加鉴权（只读 token = 访问码）
 - M8：不复用主 app lifespan（不起第二个更新轮询——8765 进程已有一个）
 """
 import json
@@ -33,7 +33,7 @@ async def health():
 @ro_app.get("/problem-parcels")
 async def list_parcels(x_read_token: str | None = Header(default=None)):
     _auth(x_read_token)
-    # 数据源按 source_mode 路由（cdp: 服务端 Playwright 自己拉；extension: 插件上报的缓存）
+    # 数据源：CDP 直驱（服务端 Playwright 拉 problemQuery 页）
     from service.registry import fetch_current_parcels
     parcels = await fetch_current_parcels()
     if not parcels:

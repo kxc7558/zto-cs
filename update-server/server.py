@@ -23,7 +23,7 @@ SECRET_PATH = DATA / "bridge_secret.key"     # 与客户端 config/bridge_secret
 PUBLISH_KEY_PATH = DATA / "publish_key.key"  # 开发者发布用（不发给客服）
 VERSIONS = DATA / "versions"
 VERSIONS.mkdir(exist_ok=True)
-WHITELIST_PREFIX = ("config/", "service/", "shared/", "extension/", "api/")
+WHITELIST_PREFIX = ("config/", "service/", "shared/", "api/", "db/")
 
 for p in (SECRET_PATH, PUBLISH_KEY_PATH):
     if not p.exists():
@@ -65,7 +65,7 @@ def _path_whitelisted(rel: str) -> bool:
     if not parts:
         return False
     top = parts[0]
-    if top not in ("config", "service", "shared", "extension", "api"):
+    if top not in ("config", "service", "shared", "api", "db"):
         return False
     # 禁路径遍历、绝对路径、盘符
     if ".." in parts or rel.startswith(("/", "\\")) or ":" in rel:

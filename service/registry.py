@@ -1,18 +1,16 @@
 """数据源注册与装配（工厂）。
 
-模块化设计（review 后简化）：执行统一在插件侧（extension），
-服务端只做决策与记账。数据源按配置选择：
-  - extension：插件上报（bridge_cache，当前，风控最低）
-  - cdp：Playwright 读取（备胎，需专用调试 Chrome）
+架构定稿（2026-10-13）：摒弃插件，改为服务端 CDP 直驱（Playwright 连调试 Chrome）。
+数据源统一为 cdp（problemQuery 页读取）。写路径唯一 = gatekeeper.run_gates，
+执行 = 服务端 cdp_driver（填弹窗/提交/回读）。
 
-旧版 CdpExecutor/ExtensionExecutor（直接调 replier.commit_reply 绕闸门）
-已删除（review CRITICAL-1）：写路径唯一 = gatekeeper.run_gates，执行在插件侧。
+历史（已删除）：插件上报（extension / bridge_cache）与 CdpExecutor/ExtensionExecutor。
 """
 from service.ports import ProblemSource
 
 
 class CdpSource:
-    """Playwright 读取的数据源（备胎）：直连调试 Chrome 读 problemQuery 页。"""
+    """Playwright 读取的数据源：直连调试 Chrome 读 problemQuery 页。"""
 
     async def fetch_parcels(self):
         from service.problem_reader import fetch_problem_list
@@ -21,12 +19,13 @@ class CdpSource:
 
 
 def get_source(mode: str = "cdp") -> ProblemSource:
+    """当前唯一数据源 = CDP 直驱（mode 保留以便未来扩展）。"""
     return CdpSource()
 
 
 async def fetch_current_parcels() -> list:
-    """按配置 source_mode 拉当前问题件（公共入口：主站/只读/闸门管线都用它）。"""
+    """拉当前问题件（公共入口：主站/只读/闸门管线都用它）。"""
     from shared import settings as cfg
-    mode = cfg.get("write.source_mode", "extension")
+    mode = cfg.get("write.source_mode", "cdp")
     source = get_source(mode)
     return await source.fetch_parcels()

@@ -114,7 +114,7 @@ async function authedFetch(url, opts = {}) {
 
 function requireCode() {
   if (getToken()) return false;
-  const code = prompt('首次使用：请输入访问码（管理员提供的密钥）');
+  const code = prompt('首次使用：请输入访问码（安装时显示，或管理员提供）');
   if (code && code.trim()) {
     localStorage.setItem('accessCode', code.trim());
     return false; // 已存，继续
@@ -212,17 +212,17 @@ async function loadConfirmations() {
       '<b>系统已帮您填好 ' + items.length + ' 条回复，请确认后发送：</b>' +
       items.map(it => `<div class="confirm-item">
         <div class="txt">${esc((it.reply_text||'').slice(0,40))}</div>
-        <button class="confirm-btn" onclick="confirmSend('${it.problem_id}', this)">确认发送</button>
+        <button class="confirm-btn" onclick="confirmSend('${it.problem_id}', '${it.id||''}', this)">确认发送</button>
       </div>`).join('');
   } catch (e) { /* 静默 */ }
 }
 
-async function confirmSend(pid, btn) {
+async function confirmSend(pid, rowId, btn) {
   btn.disabled = true; btn.textContent = '发送中…';
   try {
     const r = await (await authedFetch(API + '/bridge/confirm', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({problem_id: pid})
+      body: JSON.stringify({problem_id: pid, row_id: rowId || null})
     })).json();
     if (r.ok) { toast('已确认，系统正在发送'); loadConfirmations(); }
     else { toast('失败：' + (r.note||'')); btn.disabled = false; }

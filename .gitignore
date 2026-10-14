@@ -1,13 +1,23 @@
 .venv/
 audit/
 logs/
-db/
 __pycache__/
 *.pyc
+
+# 账本/指标：忽略数据文件，但保留 db/*.py 代码（git 不进入被忽略目录，故不能用 db/）
+db/*.db
+db/*.json
+db/__pycache__/
+
+# 凭证/身份/访问码：绝不进 git
 config/bridge_secret.key
+config/access_code.txt
 config/machine_id
 config/VERSION
+*.key
+
+# 更新服务器数据（含发布密钥）/ 备份 / 调试产物
 bak/
 update-server/data/
-*.key
-!db/*.py
+tmp_fill.png
+dist/

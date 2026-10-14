@@ -1,4 +1,5 @@
-"""插件桥接缓存：最近一次插件上报的问题件列表（供 pending_tasks 取未回复件）。"""
+"""问题件列表缓存：最近一次抓取/上报的问题件列表（供工作台兜底取数）。
+（历史为插件上报缓存；插件已摒弃，现由 CDP reader 抓取后落缓存。）"""
 import json
 from datetime import datetime, timedelta
 from pathlib import Path

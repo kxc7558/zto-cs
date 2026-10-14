@@ -3,13 +3,14 @@
 安全设计（review 硬要求，不裸奔）：
 - 每机独立令牌（安装时生成，服务器登记）
 - 更新包 SHA256 验签，验不过不装
-- 白名单：只覆盖 config/ service/ extension/ shared/ db/schema 等白名单目录，绝不接受任意路径
+- 白名单：只覆盖 config/ service/ shared/ api/ db/*.py 等白名单目录，绝不接受任意路径
 - 更新前自动备份到 bak/<版本>/，一条命令回滚
 - 每次更新进审计哈希链
+- 只升不降：服务器版本不新于本机时拒绝安装（防降级覆盖）
 
 热更分层：
 - 热更（不重启）：config/*.yaml（模板/规则/选择器）
-- 冷更（重启服务）：service/ shared/ extension/ 代码文件
+- 冷更（重启服务）：service/ shared/ api/ db/ 代码文件
 """
 import hashlib
 import hmac
@@ -36,13 +37,15 @@ WHITELIST = {
     "config": ROOT / "config",
     "service": ROOT / "service",
     "shared": ROOT / "shared",
-    "extension": ROOT / "extension",
     "api": ROOT / "api",
+    "db": ROOT / "db",
 }
 
-# 更新包绝不覆盖的文件（凭证/身份——review HIGH-5）
+# 更新包绝不覆盖的文件（凭证/身份/业务数据——review HIGH-5）
 NEVER_OVERWRITE = {"config/bridge_secret.key", "config/machine_id", "config/VERSION",
-                   "shared/update_pubkey.py"}  # 信任根不能被更新包替换
+                   "config/access_code.txt",
+                   "shared/update_pubkey.py",          # 信任根不能被更新包替换
+                   "db/zto-cs.db", "db/bridge_cache.json", "db/metrics.json"}  # 业务数据不覆盖
 
 HOT_RELOAD_DIRS = {"config"}  # 热更（不重启）
 MACHINE_ID_PATH = ROOT / "config" / "machine_id"
@@ -207,14 +210,41 @@ def rollback(version: str | None = None) -> dict:
     return {"ok": True, "from": bak.name, "restored": restored, "needs_restart": True}
 
 
+def _version_tuple(v: str) -> tuple:
+    """版本号 → 可比较元组（数字段按整数比，非数字段按字符串兜底）。
+
+    "0.2.0" > "0.1.2-test"：取每段开头的数字，非数字后缀不计入大小（仅作并列）。
+    """
+    parts = []
+    for seg in str(v).split("."):
+        num = ""
+        for ch in seg:
+            if ch.isdigit():
+                num += ch
+            else:
+                break
+        parts.append(int(num) if num else 0)
+    return tuple(parts)
+
+
+def _is_newer(server: str, current: str) -> bool:
+    """服务器版本是否严格新于当前版本（相等或更旧一律不装，杜绝降级覆盖）。"""
+    return _version_tuple(server) > _version_tuple(current)
+
+
 def poll_and_apply() -> dict:
-    """一轮：查版本→若有新版本则下载验签应用。随主服务定时跑。"""
+    """一轮：查版本→若服务器版本更新则下载验签应用（绝不降级覆盖）。随主服务定时跑。"""
     manifest = check_version()
     if manifest is None:
         return {"ok": False, "note": "update server unreachable"}
     current = _current_version()
-    if manifest.get("version") == current:
+    server_v = manifest.get("version", "")
+    if server_v == current:
         return {"ok": True, "note": "up-to-date", "version": current}
+    if not _is_newer(server_v, current):
+        # 服务器版本更旧或不可比 —— 拒绝，防止把客户机降级覆盖
+        return {"ok": True, "note": "server version not newer — skipped",
+                "version": current, "server_version": server_v}
 
     try:
         r = httpx.get(f"{_update_server()}/version/download/{manifest['version']}",

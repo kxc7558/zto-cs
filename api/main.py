@@ -31,6 +31,15 @@ _state: dict = {"reader": None, "cache": None, "cache_ts": None}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _state["reader"] = problem_reader
+    # 崩溃/重启恢复：把遗留的 committing 行核销为 unknown（否则永久卡死，见 bridge 对账）
+    try:
+        from db import ledger as _ledger
+        stale = _ledger.reconcile_committing()
+        for s in stale:
+            audit.append("reconcile_committing", {"row_id": s["id"],
+                         "problem_id": s["problem_id"]}, actor="startup")
+    except Exception:
+        pass
     # AI 后置分析（每小时批量审已提交回复，只报告不动数据）
     import asyncio
 
@@ -61,13 +70,17 @@ async def lifespan(app: FastAPI):
 
     _state["update_task"] = asyncio.create_task(update_poller())
     yield
-    for k in ("update_task", "retrospect_task"):
-        task = _state.get(k)
+    # 关停：连同后台提交任务一起取消（否则退出时在途提交被丢下，行卡 committing）
+    tasks = [_state.get(k) for k in ("update_task", "retrospect_task")]
+    tasks += list(_state.get("bg_tasks", []))
+    for task in tasks:
         if task:
             task.cancel()
+    for task in tasks:
+        if task:
             try:
                 await task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
 
 
@@ -94,14 +107,15 @@ async def health():
 
 
 @app.get("/problem-parcels")
-async def list_problem_parcels(force: bool = False):
-    """拉问题件列表（review HIGH-4：优先插件桥接缓存——插件上报的数据；
-    缓存为空/过期时兜底走 CDP reader）。带 5 分钟缓存。"""
+async def list_problem_parcels(force: bool = False,
+                               x_bridge_token: str | None = Header(default=None)):
+    """拉问题件列表（带 5 分钟缓存）。缓存空/过期时走 CDP reader。"""
+    _auth(x_bridge_token)
     now = datetime.now().timestamp()
     cached = _state.get("cache")
     if cached is not None and not force and (now - (_state.get("cache_ts") or 0)) < 300:
         return cached
-    # 优先：插件桥接缓存（extension 部署的实时数据源）
+    # 优先：bridge_cache（历史/兜底数据源）
     from service.bridge_cache import get_latest_parcels
     parcels = get_latest_parcels()
     if parcels:
@@ -110,12 +124,12 @@ async def list_problem_parcels(force: bool = False):
         _state["cache"] = payload
         _state["cache_ts"] = now
         return payload
-    # 兜底：CDP reader（需调试 Chrome 在 9222）
+    # 主数据源：CDP reader（需调试 Chrome 在 9222）
     try:
         result = await problem_reader.fetch_problem_list()
     except Exception as e:
         raise HTTPException(status_code=502,
-            detail="no data: extension not reporting and CDP reader unavailable (login the ZTO page first)")
+            detail="no data: CDP reader unavailable (login the ZTO problemQuery page first)")
     payload = json.loads(result.model_dump_json())
     _state["cache"] = payload
     _state["cache_ts"] = now
@@ -123,7 +137,9 @@ async def list_problem_parcels(force: bool = False):
 
 
 @app.get("/problem-parcels/{problem_id}")
-async def get_problem_parcel(problem_id: str):
+async def get_problem_parcel(problem_id: str,
+                             x_bridge_token: str | None = Header(default=None)):
+    _auth(x_bridge_token)
     data = _state.get("cache")
     if data is None:
         raise HTTPException(status_code=404, detail="scan first: GET /problem-parcels")
@@ -134,14 +150,17 @@ async def get_problem_parcel(problem_id: str):
 
 
 @app.get("/audit/log")
-async def audit_log(month: str | None = None):
+async def audit_log(month: str | None = None,
+                    x_bridge_token: str | None = Header(default=None)):
+    _auth(x_bridge_token)
     return audit.verify(month)
 
 
 # ---------- 自动回复开关 ----------
 
 @app.get("/auto-reply/status")
-async def auto_reply_status():
+async def auto_reply_status(x_bridge_token: str | None = Header(default=None)):
+    _auth(x_bridge_token)
     mode = auto_reply.get_mode()
     return {
         "enabled": mode != "off",
@@ -155,16 +174,20 @@ class AutoReplyToggle(BaseModel):
 
 
 @app.post("/auto-reply/toggle")
-async def toggle_auto_reply(body: AutoReplyToggle):
+async def toggle_auto_reply(body: AutoReplyToggle,
+                            x_bridge_token: str | None = Header(default=None)):
     """切换自动回复（工作台页面调用）：false=off，true=semi。落 settings.yaml，审计留痕。"""
+    _auth(x_bridge_token)
     mode = "semi" if body.enabled else "off"
     conf = auto_reply.set_mode(mode)
     return {"ok": True, "enabled": conf["enabled"], "mode": conf["mode"]}
 
 
 @app.post("/auto-reply/run")
-async def run_auto_reply_once(max_n: int = 5):
+async def run_auto_reply_once(max_n: int = 5,
+                              x_bridge_token: str | None = Header(default=None)):
     """手动触发一轮自动回复（总开关开着才跑；限流 max_n 条）。"""
+    _auth(x_bridge_token)
     try:
         return await auto_reply.run_auto_reply(max_n=max_n)
     except Exception as e:
@@ -179,12 +202,14 @@ class ReplyPrepare(BaseModel):
 
 
 @app.post("/reply/prepare")
-async def reply_prepare(body: ReplyPrepare):
+async def reply_prepare(body: ReplyPrepare,
+                        x_bridge_token: str | None = Header(default=None)):
     """第一步：闸门校验 + 生成幂等键（不提交）。
 
     人工路径：human_confirmed=True（人工已看预览）。
     敏感件在闸门②被拒（必须人在中通原系统处理）。
     """
+    _auth(x_bridge_token)
     parcel = None
     data = _state.get("cache")
     if data:
@@ -217,14 +242,19 @@ class ReplyCommit(BaseModel):
 
 
 @app.post("/reply/commit")
-async def reply_commit(body: ReplyCommit):
+async def reply_commit(body: ReplyCommit,
+                       x_bridge_token: str | None = Header(default=None)):
     """第二步：凭 prepare 签发的幂等键真实提交。
 
     闸门在 prepare 已过；commit 只认 prepare 的 key（文本不一致 → key 对不上 → 拒），
-    敏感词再查一次（防御纵深）。
+    敏感词 + 规则（空/长度）再查一遍（防御纵深：人工可能改过文本）。
     """
+    _auth(x_bridge_token)
     if rules.is_sensitive("", body.reply_text):
         raise HTTPException(status_code=403, detail="sensitive content — blocked")
+    ok, why = rules.validate_reply(body.reply_text)
+    if not ok:
+        raise HTTPException(status_code=403, detail=f"rule:{why}")
     # 校验 key 与文本绑定（prepare 冻结的就是这个文本；不一致 = 没走过 prepare）
     expect_key = replier.ledger.make_idempotency_key(
         body.problem_id, "reply", body.reply_text, confirmed_by="human")
@@ -239,18 +269,20 @@ async def reply_commit(body: ReplyCommit):
 
 
 @app.get("/reply/ledger/{problem_id}")
-async def reply_ledger(problem_id: str):
+async def reply_ledger(problem_id: str,
+                       x_bridge_token: str | None = Header(default=None)):
+    _auth(x_bridge_token)
     return replier.ledger.get_by_problem(problem_id)
 
 
-# ---------- 插件桥接（extension bridge） ----------
-# 分工：插件=手（只做页面里的读和写），服务端=脑（决策/审核/留痕）。
-# 插件不做任何决策：回什么、能不能回，全由服务端定。
+# ---------- 桥接（CDP 直驱确认流） ----------
+# 分工：服务端=脑（决策/审核/留痕）；执行=CDP（填弹窗/提交/回读）。
+# 任何一步都不由模型自行决定：回什么、能不能回，全由闸门定。
 
 
 @app.get("/bridge/confirmations")
 async def bridge_confirmations(x_bridge_token: str | None = Header(default=None)):
-    """待确认队列（工作台展示：插件已填好、等人工确认的回复）。"""
+    """待确认队列（工作台展示：已填好、等人工确认的回复）。"""
     _auth(x_bridge_token)
     from service.bridge import pending_confirmations
     return {"items": pending_confirmations()}
@@ -258,18 +290,31 @@ async def bridge_confirmations(x_bridge_token: str | None = Header(default=None)
 
 class BridgeConfirm(BaseModel):
     problem_id: str
+    row_id: str | None = None   # 精确到具体账本行（同 problem_id 可能多行）
 
 
 @app.post("/bridge/confirm")
 async def bridge_confirm(body: BridgeConfirm, x_bridge_token: str | None = Header(default=None)):
-    """工作台确认发送：pending → confirmed，返回提交指令（插件执行）。"""
+    """工作台确认发送：认领具体行 → committing，后台 CDP 提交（前端轮询账本状态）。"""
     _auth(x_bridge_token)
     from service.bridge import confirm_and_dispatch
     # CDP 提交是长任务（可能 30s+）——后台执行，HTTP 立即返回（前端轮询账本状态）
     import asyncio
-    task = asyncio.create_task(confirm_and_dispatch(body.problem_id, confirmed_by="human:workbench"))
+    task = asyncio.create_task(
+        confirm_and_dispatch(body.problem_id, confirmed_by="human:workbench", row_id=body.row_id))
     _state.setdefault("bg_tasks", []).append(task)  # 持引用防 GC
-    task.add_done_callback(lambda t: _state["bg_tasks"].remove(t) if t in _state.get("bg_tasks", []) else None)
+
+    def _done(t):
+        # 取回异常（否则 "Task exception was never retrieved"）；移除引用
+        if t.cancelled():
+            pass
+        elif t.exception():
+            audit.append("bridge_confirm_task_error",
+                         {"error": str(t.exception())[:160]}, actor="human:workbench")
+        if t in _state.get("bg_tasks", []):
+            _state["bg_tasks"].remove(t)
+
+    task.add_done_callback(_done)
     return {"ok": True, "note": "submitting in background — 刷新列表查看结果"}
 
 
@@ -288,23 +333,24 @@ async def bridge_history(x_bridge_token: str | None = Header(default=None)):
 
 @app.get("/bridge/config")
 async def bridge_config(x_bridge_token: str | None = Header(default=None)):
-    """插件拉配置：模式（semi/full）、轮询间隔、敏感词（供插件本地预过滤）。"""
+    """返回运行配置：模式（semi/full）、轮询间隔、敏感词。"""
     _auth(x_bridge_token)
     from shared.config import SENSITIVE_KEYWORDS
+    mode = auto_reply.get_mode()
     return {
-        "mode": cfg.get("write.auto_reply.mode", "semi"),
-        "source_mode": cfg.get("write.source_mode", "extension"),
+        "mode": mode,                       # off / semi / full（唯一真源，避免与下面重复键互相覆盖）
+        "source_mode": cfg.get("write.source_mode", "cdp"),
         "poll_interval_seconds": cfg.get("write.auto_reply.poll_interval_seconds", 60),
         "send_interval_seconds": cfg.get("write.auto_reply.send_interval_seconds", 45),
         "sensitive_keywords": SENSITIVE_KEYWORDS,
-        "enabled": auto_reply.get_mode() != "off",
-        "mode": auto_reply.get_mode(),
+        "enabled": mode != "off",
     }
 
 
 @app.post("/retrospect/run")
-async def retrospect_run():
+async def retrospect_run(x_bridge_token: str | None = Header(default=None)):
     """手动触发一轮 AI 后置分析（工作台调用）。"""
+    _auth(x_bridge_token)
     from service.retrospect import run_retrospect
     try:
         return await run_retrospect()
@@ -313,28 +359,32 @@ async def retrospect_run():
 
 
 @app.get("/retrospect/latest")
-async def retrospect_latest():
+async def retrospect_latest(x_bridge_token: str | None = Header(default=None)):
     """读最近一次后置分析结果（工作台展示）。"""
+    _auth(x_bridge_token)
     from service.retrospect import latest_retrospect
     return latest_retrospect()
 
 
 @app.get("/metrics/hours")
-async def metrics_hours():
+async def metrics_hours(x_bridge_token: str | None = Header(default=None)):
     """工时基线汇总（Q9：为减员承诺定量）。"""
+    _auth(x_bridge_token)
     from db.metrics import summary
     return summary()
 
 
 @app.get("/breaker/status")
-async def breaker_status():
+async def breaker_status(x_bridge_token: str | None = Header(default=None)):
     """止损状态（工作台显示：今日 AI flag 数/验证码次数/是否触发过）。"""
+    _auth(x_bridge_token)
     from service.breaker import status
     return status()
 
 
 @app.get("/bridge/fingerprint")
-async def bridge_fingerprint():
-    """插件配置页展示的密钥指纹（不是密钥本身，供人工核对两边配的是同一把）。"""
+async def bridge_fingerprint(x_bridge_token: str | None = Header(default=None)):
+    """访问码指纹（不是访问码本身，供人工核对两边配的是同一把）。"""
+    _auth(x_bridge_token)
     return {"fingerprint": bridge_auth.key_fingerprint()}
 

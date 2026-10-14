@@ -184,6 +184,10 @@ async def fill_and_submit(hint: str, reply_text: str, hint2: str = "") -> dict:
     return await _with_page(inner)
 
 
-async def confirm_flow(hint: str, reply_text: str) -> dict:
-    """工作台确认后的执行：重新填（弹窗可能已关）→ 提交 → 回读。"""
-    return await fill_and_submit(hint, reply_text)
+async def confirm_flow(hint: str, hint2: str, reply_text: str) -> dict:
+    """工作台确认后的执行：重新填（弹窗可能已关）→ 提交 → 回读。
+
+    hint/hint2 是自动填写时命中的同一组行锚（落进账本），确认时复用，
+    绝不重新猜锚（否则无运单号的问题件会因锚不存在而必失败）。
+    """
+    return await fill_and_submit(hint, reply_text, hint2)

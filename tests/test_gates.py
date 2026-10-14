@@ -152,23 +152,38 @@ async def test_reviewer_failsafe_on_error():
 
 # ---------- 幂等账本 ----------
 
-def test_ledger_idempotent_intent():
+def test_ledger_idempotent_intent(tmp_path, monkeypatch):
+    import sqlite3
     from db import ledger
-    from shared.config import DB_PATH
-    # 用独立测试库
-    import shared.config as cfg
-    from unittest.mock import patch
-    key = "testkey_" + "a" * 24
-    with patch.object(ledger, "_conn") as mock_conn:
-        # 简化：直接测真实库但用唯一 key，测完清理
-        pass
-    # 直接测：同 key 两次 record_intent 只有一行
+    # 用独立测试库（monkeypatch 单例连接，绝不写生产库）
+    conn = sqlite3.connect(tmp_path / "t.db", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(ledger._SCHEMA)
+    monkeypatch.setattr(ledger, "_conn_instance", conn)
     k = ledger.make_idempotency_key("prob1", "reply", "text", "tester")
     r1 = ledger.record_intent("prob1", None, "reply", "text", k, False, "tester")
     r2 = ledger.record_intent("prob1", None, "reply", "text", k, False, "tester")
     assert r1["status"] == r2["status"]
     st = ledger.get_status(k)
     assert st is not None
+
+
+def test_ledger_anchor_roundtrip(tmp_path, monkeypatch):
+    """行锚落账并可按 id 精确取回（confirm 复用同一锚）。"""
+    import sqlite3
+    from db import ledger
+    conn = sqlite3.connect(tmp_path / "t2.db", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(ledger._SCHEMA)
+    monkeypatch.setattr(ledger, "_conn_instance", conn)
+    k = ledger.make_idempotency_key("p9", "reply", "x", "tester")
+    ledger.record_intent("p9", None, "reply", "x", k, False, "tester",
+                         anchor="张三", anchor2="2026-10-13")
+    row = conn.execute("SELECT anchor, anchor2 FROM write_ledger WHERE idempotency_key=?",
+                       (k,)).fetchone()
+    assert row["anchor"] == "张三" and row["anchor2"] == "2026-10-13"
+    assert ledger.delete_intent(k) == 1
+    assert ledger.get_status(k) is None
 
 
 def test_ledger_make_key_deterministic():
@@ -189,20 +204,27 @@ def test_ledger_key_changes_with_confirmer():
 
 # ---------- 审计链 ----------
 
-def test_audit_chain_verifies():
+@pytest.fixture(autouse=True)
+def tmp_audit(tmp_path_factory, monkeypatch):
+    """把审计目录指向临时目录（自动生效），任何测试都不污染生产哈希链。"""
+    from shared import audit
+    d = tmp_path_factory.mktemp("audit")
+    monkeypatch.setattr(audit, "AUDIT_DIR", d)
+    return d
+
+
+def test_audit_chain_verifies(tmp_audit):
     from shared import audit
     audit.append("test_event", {"x": 1}, actor="test")
     v = audit.verify()
     assert v["ok"]
 
 
-def test_audit_chain_detects_tamper():
+def test_audit_chain_detects_tamper(tmp_audit):
     import json
     from shared import audit
-    from shared.config import AUDIT_DIR
-    # 找最新月的 audit.jsonl，改最后一条，验证应失败
     audit.append("tamper_test", {"mark": "before"}, actor="test")
-    d = max(p for p in AUDIT_DIR.iterdir() if p.is_dir() and len(p.name) == 7)
+    d = max(p for p in tmp_audit.iterdir() if p.is_dir() and len(p.name) == 7)
     f = d / "audit.jsonl"
     lines = f.read_text(encoding="utf-8").splitlines()
     rec = json.loads(lines[-1])
@@ -211,16 +233,19 @@ def test_audit_chain_detects_tamper():
     f.write_text("\n".join(lines) + "\n", encoding="utf-8")
     v = audit.verify()
     assert not v["ok"], "篡改必须被验出"
-    # 还原（删测试标记那条没法直接还原，重写为原始）
-    # 简化：把最后一条改回去
-    rec["payload"]["mark"] = "before"
-    lines[-1] = json.dumps(rec, ensure_ascii=False)
-    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_updater_refuses_downgrade(monkeypatch):
+    """只升不降：服务器版本不新于本机时拒绝安装。"""
+    from service import updater
+    assert updater._is_newer("0.3.0", "0.2.0")
+    assert not updater._is_newer("0.2.0", "0.2.0")
+    assert not updater._is_newer("0.1.2-test", "0.2.0")  # 不得降级覆盖
 
 
 # ---------- updater 安全 ----------
 
-def test_updater_rejects_credential_overwrite_normalized():
+def test_updater_rejects_credential_overwrite_normalized(tmp_audit):
     """CRITICAL-2 回归：config/./bridge_secret.key 归一化路径必须被拒。"""
     import io, zipfile
     from service.updater import apply_update
@@ -235,7 +260,7 @@ def test_updater_rejects_credential_overwrite_normalized():
     assert "credential" in r["note"]
 
 
-def test_updater_rejects_path_traversal():
+def test_updater_rejects_path_traversal(tmp_audit):
     import io, zipfile
     from service.updater import apply_update
     buf = io.BytesIO()
@@ -248,7 +273,7 @@ def test_updater_rejects_path_traversal():
     assert not r["ok"]
 
 
-def test_updater_rejects_bad_signature():
+def test_updater_rejects_bad_signature(tmp_audit):
     import io, zipfile
     from service.updater import apply_update
     buf = io.BytesIO()
