@@ -1,9 +1,8 @@
-# 运行依赖（唯一来源：安装.bat / scripts/启动服务.bat 统一 pip install -r 本文件）
-# 版本锁定：与开发机 .venv 实测通过的一致，避免大版本漂移破坏兼容。
-fastapi==0.143.0
-uvicorn==0.54.0
-httpx==0.28.1
-PyYAML==6.0.3
-pydantic==2.14.1
-playwright==1.63.0
-PyNaCl==1.6.2
+fastapi
+uvicorn
+httpx
+pyyaml
+pynacl
+playwright
+pytest
+pytest-asyncio
