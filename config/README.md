@@ -44,7 +44,7 @@
 **开发**：
 ```bash
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\pip install -r config/requirements.txt
 ```
 （连已有调试 Chrome 的 `connect_over_cdp` 不需要 `playwright install chromium`。）
 

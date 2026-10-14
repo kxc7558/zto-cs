@@ -34,7 +34,7 @@ def collect_files() -> dict:
             continue
         for p in base.rglob("*"):
             if p.is_file() and not any(s in p.parts for s in SKIP):
-                rel = str(p.relative_to(ROOT)).replace("\\\\", "/")
+                rel = str(p.relative_to(ROOT)).replace("\\", "/")
                 files[rel] = p.read_bytes()
     return files
 
