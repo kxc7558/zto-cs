@@ -35,7 +35,17 @@ async def list_parcels(x_read_token: str | None = Header(default=None)):
     _auth(x_read_token)
     # 数据源：CDP 直驱（服务端 Playwright 拉 problemQuery 页）
     from service.registry import fetch_current_parcels
-    parcels = await fetch_current_parcels()
+    try:
+        parcels = await fetch_current_parcels()
+    except Exception as e:
+        from service.problem_reader import SessionExpired
+        if isinstance(e, SessionExpired) or "会话失效" in str(e):
+            # 触发 breaker（工作台显示"中通登录已过期"）
+            from service.breaker import record_captcha
+            record_captcha()
+            raise HTTPException(status_code=440,
+                detail="中通登录已过期——请双击 启动浏览器.bat 重新登录中通")
+        raise
     if not parcels:
         raise HTTPException(status_code=502, detail="暂无数据（请确认中通页面已登录并点过查询）")
     items = [json.loads(p.model_dump_json()) for p in parcels]

@@ -3,6 +3,10 @@
 账本行状态机 pending → committing → committed/unknown；确认一律按行 id 操作。
 闸门逻辑全复用：开关 / 敏感硬闸 / 规则 / 幂等账本。
 """
+import sys
+import os
+import json
+from pathlib import Path
 from datetime import datetime
 
 import asyncio

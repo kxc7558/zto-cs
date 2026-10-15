@@ -89,9 +89,11 @@ async def run_auto_reply(max_n: int = 3) -> dict:
             hint2 = p.created_at[:10]
         else:
             hint = (p.description or "")[:15]
+        # 行锚落账本（确认时复用同一锚，fill 与 confirm 锚一致）
+        row_anchor = hint if not hint2 else f"{hint}|{hint2}"
         ledger.record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
                              key, auto=False, confirmed_by=f"cdp:{mode}", ptype=p.ptype or "",
-                             anchor=hint, anchor2=hint2)
+                             row_anchor=row_anchor)
         record_first_seen(p.problem_id, p.ptype or "")
         from service.cdp_driver import fill_for_confirm
         try:

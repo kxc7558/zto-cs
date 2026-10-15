@@ -75,6 +75,12 @@
     <div class="label" id="bigLabel">还没回的问题件</div>
   </div>
 
+  <div class="ai-check" id="sessionExpired" style="display:none">
+    <div class="box" style="background:#ffece8;border-color:#fda4a4;color:#a41010">
+      <b>中通登录已过期</b> —— 请双击「启动浏览器.bat」重新登录中通（安盾/微信扫码），登录后点"刷新"。
+    </div>
+  </div>
+
   <div class="ai-check" id="confirmBox">
     <div class="box" id="confirmInner"></div>
   </div>
@@ -157,7 +163,16 @@ async function loadList(force) {
   const box = document.getElementById('list');
   box.innerHTML = '<div class="empty">加载中…</div>';
   try {
-    const data = await (await authedFetch(API + '/problem-parcels' + (force ? '?force=true' : ''))).json();
+    const resp = await authedFetch(API + '/problem-parcels' + (force ? '?force=true' : ''));
+    if (resp.status === 440) {
+      const num = document.getElementById('bigNum');
+      num.textContent = '?';
+      num.className = 'num nonzero';
+      document.getElementById('bigLabel').textContent = '中通登录已过期，请重新登录';
+      showSessionExpired();
+      return;
+    }
+    const data = await resp.json();
     const items = data.items || [];
     const wait = items.filter(i => !i.latest_reply).length;
     // 大数字：还有几件没回
@@ -188,6 +203,11 @@ async function loadList(force) {
   } catch (e) {
     box.innerHTML = `<div class="empty">加载失败：${esc(e.message)}<br>若提示需要访问码，请刷新页面重新输入</div>`;
   }
+}
+
+// 会话失效（440）：红条 + 指引
+function showSessionExpired() {
+  document.getElementById('sessionExpired').style.display = 'block';
 }
 
 async function loadBreaker() {

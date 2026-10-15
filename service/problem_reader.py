@@ -19,6 +19,11 @@ from shared.models import ParcelList, ProblemParcel
 from service.browser import BrowserSession
 
 
+class SessionExpired(Exception):
+    """中通业务会话失效（接口 412 / code:412）——页面不跳登录，静默返回空数据。"""
+    pass
+
+
 def _make_problem_id(row: dict) -> str:
     """问题事件锚：运单号+类型+登记时间 合成（§15.4，无天然键时确定性合成）。"""
     raw = f"{row.get('waybill_no','')}|{row.get('ptype','')}|{row.get('created_at','')}"
@@ -37,8 +42,50 @@ async def fetch_problem_list() -> ParcelList:
         # 若已有 problemQuery tab 就直接读（别重新 goto——刷新会丢掉已查询的数据）
         if "problemQuery" not in p.url:
             p = await session.goto(PROBLEM_QUERY_URL)
+        # 会话失效检测（待办①）：点查询前挂响应监听，中通业务接口 412/code:412 → SessionExpired。
+        # 中通页面不跳登录、静默显示空列表——必须监听接口才能区分"会话失效"与"真无数据"。
+        session_state = {"expired": False, "codes": []}
+
+        def _on_response(resp):
+            try:
+                if "problem" in resp.url.lower() or "query" in resp.url.lower():
+                    if resp.status in (401, 403, 412):
+                        session_state["expired"] = True
+                        return
+                    if resp.status == 200:
+                        # HTTP 200 + body code 412/720（"无效session"）的假成功也要查
+                        session_state["check_body"] = resp
+            except Exception:
+                pass
+
+        p.on("response", _on_response)
+        # 点「查询」刷新数据（同时触发接口——监听它的响应码）
+        try:
+            await p.evaluate("""
+              () => {
+                const btn = Array.from(document.querySelectorAll('button'))
+                  .find(b => b.innerText.trim() === '查询');
+                if (btn) btn.click();
+              }
+            """)
+            await asyncio.sleep(4)
+        except Exception:
+            pass
+        # HTTP 200 + body code 412/720 的假成功检查（body 异步读）
+        cb = session_state.get("check_body")
+        if cb is not None:
+            try:
+                body = await cb.text()
+                if '"code":412' in body or '"code":720' in body or "无效session" in body:
+                    raise SessionExpired("中通业务会话失效（code 412/720 无效session）——请重新登录")
+            except SessionExpired:
+                raise
+            except Exception:
+                pass
+        if session_state["expired"]:
+            raise SessionExpired("中通业务会话失效（接口 401/412）——请重新登录")
         await p.wait_for_selector("table", timeout=30_000)
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         rows = await p.evaluate(
             """
             () => {
