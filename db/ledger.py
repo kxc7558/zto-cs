@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS write_ledger (
     content_hash TEXT,
     ptype TEXT DEFAULT "",
     anchor TEXT,                      -- 确定性行锚（运单号 / 创建人），确认时复用
-    anchor2 TEXT                      -- 副锚（登记时间 / 空）
+    anchor2 TEXT,                     -- 副锚（登记时间 / 空）
+    confirmed_actor TEXT              -- 实际确认人（保留 confirmed_by 来源，如 cdp:semi / human）
 )
 """
 
@@ -45,17 +46,21 @@ _lock = threading.Lock()
 def _conn() -> sqlite3.Connection:
     global _conn_instance
     if _conn_instance is None:
-        _conn_instance = sqlite3.connect(DB_PATH, check_same_thread=False)
-        _conn_instance.row_factory = sqlite3.Row
-        _conn_instance.executescript(_SCHEMA)
-        _migrate(_conn_instance)
+        # 双检锁：懒初始化也必须在锁内，否则多线程首访会建两个连接、泄漏一个、跑两次 migrate
+        with _lock:
+            if _conn_instance is None:
+                conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                conn.executescript(_SCHEMA)
+                _migrate(conn)
+                _conn_instance = conn
     return _conn_instance
 
 
 def _migrate(c: sqlite3.Connection) -> None:
-    """老库补列（anchor/anchor2）：CREATE TABLE IF NOT EXISTS 不会给已存在的表加列。"""
+    """老库补列（anchor/anchor2/confirmed_actor）：CREATE TABLE IF NOT EXISTS 不会给已存在的表加列。"""
     cols = {r["name"] for r in c.execute("PRAGMA table_info(write_ledger)").fetchall()}
-    for name in ("anchor", "anchor2"):
+    for name in ("anchor", "anchor2", "confirmed_actor"):
         if name not in cols:
             c.execute(f"ALTER TABLE write_ledger ADD COLUMN {name} TEXT")
     c.commit()

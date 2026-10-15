@@ -10,8 +10,10 @@ import json
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Header
+from fastapi.responses import FileResponse
 
 from shared import audit, bridge_auth
+from shared.config import ROOT
 from service.retrospect import latest_retrospect
 from service.breaker import status as breaker_status
 from db.metrics import summary as metrics_summary
@@ -19,10 +21,18 @@ from db.metrics import summary as metrics_summary
 
 ro_app = FastAPI(title="问题件助手（只读）")
 
+_INDEX_HTML = ROOT / "api" / "static" / "index.html"
+
 
 def _auth(token: str | None) -> None:
     if not bridge_auth.verify(token):
         raise HTTPException(status_code=401, detail="read auth failed")
+
+
+@ro_app.get("/")
+async def index():
+    """只读页入口（前端据 /health.readonly 自行隐藏写开关）。"""
+    return FileResponse(_INDEX_HTML)
 
 
 @ro_app.get("/health")
@@ -45,7 +55,14 @@ async def list_parcels(x_read_token: str | None = Header(default=None)):
             record_captcha()
             raise HTTPException(status_code=440,
                 detail="中通登录已过期——请双击 启动浏览器.bat 重新登录中通")
-        raise
+        # CDP 不可达（浏览器没启动）→ 可操作提示，而非不透明 500
+        msg = str(e)
+        low = msg.lower()
+        if ("econnrefused" in low or "connect" in low or "9222" in low
+                or "playwright" in low or "browser" in low):
+            raise HTTPException(status_code=503,
+                detail="浏览器未启动——请双击 启动浏览器.bat（或确认调试 Chrome 已开在 9222）")
+        raise HTTPException(status_code=502, detail=f"数据源不可用：{msg[:120]}")
     if not parcels:
         raise HTTPException(status_code=502, detail="暂无数据（请确认中通页面已登录并点过查询）")
     items = [json.loads(p.model_dump_json()) for p in parcels]

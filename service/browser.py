@@ -48,7 +48,15 @@ class BrowserSession:
         return p
 
     async def close(self) -> None:
-        if self._browser:
-            await self._browser.close()
-        if self._pw:
-            await self._pw.stop()
+        # 各自 try：浏览器已断时 _browser.close() 会抛，绝不能因此漏掉 _pw.stop()
+        # （否则整个 playwright 驱动进程随之泄漏）。close 常在 finally 中调用，不许再抛。
+        try:
+            if self._browser:
+                await self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._pw:
+                await self._pw.stop()
+        except Exception:
+            pass

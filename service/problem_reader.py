@@ -24,6 +24,43 @@ class SessionExpired(Exception):
     pass
 
 
+# 会话失效判定口径（精确到门户域 + 业务接口，避免误报/漏报）
+# 背景：旧口径 `"problem" in url or "query" in url` + 401/403/412 过宽——
+# 无关接口（如 /api/user/queryPoints 返回 403）与 WAF 反爬 412 都会被误判成会话失效，
+# 3 次即触发 breaker 停掉自动回复。
+PORTAL_HOST_HINT = "zto56.com"                                   # 只认中通门户域
+SESSION_URL_HINTS = ("problem", "session", "login", "auth")      # 业务/会话接口关键词
+EXPIRED_STATUS = (401, 412)                                      # 403 是通用禁止，剔出
+EXPIRED_BODY_CODES = (412, 720)                                  # body 假成功码
+
+
+def _iter_codes(obj):
+    """递归收集 JSON 里所有 code 字段（容忍嵌套/键序）。"""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == "code" and isinstance(v, int):
+                yield v
+            else:
+                yield from _iter_codes(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _iter_codes(v)
+
+
+def _body_is_expired(body: str) -> bool:
+    """body 是否会话失效：优先结构化解析 code，兜底子串（容忍空格/换行）。"""
+    try:
+        obj = json.loads(body)
+        if any(c in EXPIRED_BODY_CODES for c in _iter_codes(obj)):
+            return True
+    except Exception:
+        pass
+    if "无效session" in body:
+        return True
+    compact = body.replace(" ", "").replace("\n", "").replace("\r", "")
+    return '"code":412' in compact or '"code":720' in compact
+
+
 def _make_problem_id(row: dict) -> str:
     """问题事件锚：运单号+类型+登记时间 合成（§15.4，无天然键时确定性合成）。"""
     raw = f"{row.get('waybill_no','')}|{row.get('ptype','')}|{row.get('created_at','')}"
@@ -44,17 +81,22 @@ async def fetch_problem_list() -> ParcelList:
             p = await session.goto(PROBLEM_QUERY_URL)
         # 会话失效检测（待办①）：点查询前挂响应监听，中通业务接口 412/code:412 → SessionExpired。
         # 中通页面不跳登录、静默显示空列表——必须监听接口才能区分"会话失效"与"真无数据"。
-        session_state = {"expired": False, "codes": []}
+        session_state = {"expired": False, "codes": [], "bodies": []}
 
         def _on_response(resp):
             try:
-                if "problem" in resp.url.lower() or "query" in resp.url.lower():
-                    if resp.status in (401, 403, 412):
-                        session_state["expired"] = True
-                        return
-                    if resp.status == 200:
-                        # HTTP 200 + body code 412/720（"无效session"）的假成功也要查
-                        session_state["check_body"] = resp
+                url = (resp.url or "").lower()
+                if PORTAL_HOST_HINT not in url:
+                    return
+                hit_hint = any(h in url for h in SESSION_URL_HINTS)
+                if hit_hint and resp.status in EXPIRED_STATUS:
+                    session_state["codes"].append((url[:80], resp.status))
+                    session_state["expired"] = True
+                    return
+                if hit_hint and resp.status == 200:
+                    # HTTP 200 + body code 412/720（"无效session"）的假成功也要查。
+                    # 收「全部」候选（不能 last-wins——会话接口不一定最后返回）
+                    session_state["bodies"].append(resp)
             except Exception:
                 pass
 
@@ -71,17 +113,17 @@ async def fetch_problem_list() -> ParcelList:
             await asyncio.sleep(4)
         except Exception:
             pass
-        # HTTP 200 + body code 412/720 的假成功检查（body 异步读）
-        cb = session_state.get("check_body")
-        if cb is not None:
+        # HTTP 200 + body code 412/720 的假成功检查（遍历全部候选；text() 失败要留痕，不静默吞）
+        for resp in session_state["bodies"]:
             try:
-                body = await cb.text()
-                if '"code":412' in body or '"code":720' in body or "无效session" in body:
-                    raise SessionExpired("中通业务会话失效（code 412/720 无效session）——请重新登录")
-            except SessionExpired:
-                raise
-            except Exception:
-                pass
+                body = await resp.text()
+            except Exception as e:  # noqa: BLE001
+                audit.append("session_check_body_error",
+                             {"error": str(e)[:100], "url": (resp.url or "")[:80]},
+                             actor="reader")
+                continue
+            if _body_is_expired(body):
+                raise SessionExpired("中通业务会话失效（code 412/720 无效session）——请重新登录")
         if session_state["expired"]:
             raise SessionExpired("中通业务会话失效（接口 401/412）——请重新登录")
         await p.wait_for_selector("table", timeout=30_000)

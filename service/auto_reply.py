@@ -56,7 +56,6 @@ async def run_auto_reply(max_n: int = 3) -> dict:
     """执行一轮自动回复（semi）：拉数据 → 闸门 → CDP 填弹窗 → 停在工作台等确认。"""
     from service.gatekeeper import run_gates
     from service.registry import fetch_current_parcels
-    from service.cdp_driver import fill_for_confirm
     from db import ledger
     from db.metrics import record_first_seen
 
@@ -89,15 +88,18 @@ async def run_auto_reply(max_n: int = 3) -> dict:
             hint2 = p.created_at[:10]
         else:
             hint = (p.description or "")[:15]
-        # 行锚落账本（确认时复用同一锚，fill 与 confirm 锚一致）
-        row_anchor = hint if not hint2 else f"{hint}|{hint2}"
+        # 行锚落账本：anchor/anchor2 分开落（与 confirm 读法一致，绝不拼成含 "|" 的合并串）
         ledger.record_intent(p.problem_id, p.waybill_no, "reply", gate.reply_text,
                              key, auto=False, confirmed_by=f"cdp:{mode}", ptype=p.ptype or "",
-                             row_anchor=row_anchor)
+                             anchor=hint, anchor2=(hint2 or None))
         record_first_seen(p.problem_id, p.ptype or "")
-        from service.cdp_driver import fill_for_confirm
+        from service.cdp_runner import run_cdp_action
         try:
-            r = await fill_for_confirm(hint=hint, hint2=hint2, reply_text=gate.reply_text)
+            r = await run_cdp_action("fill", hint, hint2, gate.reply_text)
+        except asyncio.CancelledError:
+            # 取消（如关停/超时）：回撤意图，别留一条假 pending 混进待确认队列
+            ledger.delete_intent(key)
+            raise
         except Exception as e:  # noqa: BLE001 — 填弹窗抛异常也必须回撤意图，否则永久卡一条假 pending
             r = {"ok": False, "error": f"fill raised: {str(e)[:120]}"}
         if r.get("ok"):

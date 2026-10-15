@@ -113,7 +113,12 @@ async function authedFetch(url, opts = {}) {
     localStorage.removeItem('accessCode');
     if (requireCode()) throw new Error('need access code');
     // 重试一次
-    return fetch(url, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+    const r2 = await fetch(url, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+    if (r2.status === 401) {
+      // 重试仍 401 = 访问码不正确，必须显式报错（绝不能落进"没有需要处理的问题件"分支）
+      throw new Error('访问码不正确（401），请刷新页面重新输入');
+    }
+    return r2;
   }
   return r;
 }
@@ -138,25 +143,40 @@ function toast(msg) {
   setTimeout(() => t.classList.remove('show'), 2500);
 }
 
+let IS_READONLY = false;
+
+// 只读页（8766）没有写端点——据 /health.readonly 判定并隐藏写开关（避免"看着能开、点了没反应"）
+async function detectMode() {
+  try {
+    const h = await (await fetch(API + '/health')).json();
+    IS_READONLY = !!h.readonly;
+  } catch (e) { /* 探测失败则按可写处理 */ }
+  if (IS_READONLY) document.querySelector('.auto-box').style.display = 'none';
+}
+
 async function refreshAuto() {
+  if (IS_READONLY) return;
   try {
     const s = await (await authedFetch(API + '/auto-reply/status')).json();
     document.getElementById('autoSwitch').classList.toggle('on', s.enabled);
   } catch (e) {
-    // 只读页（8766）没有开关端点——隐藏开关（开关在装机终端的 8765 页面）
-    document.querySelector('.auto-box').style.display = 'none';
+    // 瞬时网络错误不永久隐藏开关（只读页由 detectMode 统一隐藏）
+    console.warn('auto status 加载失败', e);
   }
 }
 
 async function toggleAuto() {
-  const s = await (await authedFetch(API + '/auto-reply/status')).json();
-  const next = !s.enabled;
-  if (next && !confirm('开启后，系统会帮您把回复写好。\n最后一步（点发送）还是您来确认。\n\n要开启吗？')) return;
-  const r = await (await authedFetch(API + '/auto-reply/toggle', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({enabled: next})
-  })).json();
-  if (r.ok) { toast(next ? '已开启' : '已关闭'); refreshAuto(); }
+  try {
+    const s = await (await authedFetch(API + '/auto-reply/status')).json();
+    const next = !s.enabled;
+    if (next && !confirm('开启后，系统会帮您把回复写好。\n最后一步（点发送）还是您来确认。\n\n要开启吗？')) return;
+    const r = await (await authedFetch(API + '/auto-reply/toggle', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({enabled: next})
+    })).json();
+    if (r.ok) { toast(next ? '已开启' : '已关闭'); refreshAuto(); }
+    else { toast('切换失败：' + (r.detail || r.note || '')); }
+  } catch (e) { toast('切换失败：' + e.message); }
 }
 
 async function loadList(force) {
@@ -169,9 +189,24 @@ async function loadList(force) {
       num.textContent = '?';
       num.className = 'num nonzero';
       document.getElementById('bigLabel').textContent = '中通登录已过期，请重新登录';
+      box.innerHTML = '<div class="empty"><div class="icon">⚠</div><div class="tip">中通登录已过期，请按上方提示重新登录后点「刷新」</div></div>';
       showSessionExpired();
       return;
     }
+    if (!resp.ok) {
+      // 非 2xx（502 数据源不可用 / 503 浏览器未启动 / 401 访问码错误）绝不能渲染成「没有需要处理的问题件」
+      let detail = '';
+      try { detail = (await resp.json()).detail || ''; } catch (e) { /* 非 JSON 响应 */ }
+      const num = document.getElementById('bigNum');
+      num.textContent = '!';
+      num.className = 'num nonzero';
+      document.getElementById('bigLabel').textContent = '数据加载失败';
+      box.innerHTML = `<div class="empty"><div class="icon">⚠</div><div class="tip">加载失败${detail ? '：' + esc(detail) : '（HTTP ' + resp.status + '）'}<br>请确认浏览器已启动/登录，或刷新重试</div></div>`;
+      return;
+    }
+    // 成功分支：复位 440 红条与大标题（否则重新登录成功后红条永不消失）
+    document.getElementById('sessionExpired').style.display = 'none';
+    document.getElementById('bigLabel').textContent = '还没回的问题件';
     const data = await resp.json();
     const items = data.items || [];
     const wait = items.filter(i => !i.latest_reply).length;
@@ -186,7 +221,12 @@ async function loadList(force) {
     }
     // 未回复排前面；每个只显示三行字：类型、一句话、网点
     const sorted = [...items].sort((a,b) => (a.latest_reply?1:0) - (b.latest_reply?1:0));
-    box.innerHTML = sorted.slice(0, 20).map(it => {
+    const shown = sorted.slice(0, 20);
+    let more = '';
+    if (sorted.length > shown.length) {
+      more = `<div class="empty" style="padding:12px"><div class="tip">以上仅显示 20 条，还有 ${sorted.length - shown.length} 条未显示（大数字为全量统计）</div></div>`;
+    }
+    box.innerHTML = shown.map(it => {
       let badge;
       if (it.latest_reply) badge = '<span class="badge green">已回复</span>';
       else if (it.needs_human) badge = '<span class="badge red">要您亲自处理</span>';
@@ -199,7 +239,7 @@ async function loadList(force) {
         </div>
         ${badge}
       </div>`;
-    }).join('');
+    }).join('') + more;
   } catch (e) {
     box.innerHTML = `<div class="empty">加载失败：${esc(e.message)}<br>若提示需要访问码，请刷新页面重新输入</div>`;
   }
@@ -221,6 +261,8 @@ async function loadBreaker() {
   } catch (e) { /* 静默 */ }
 }
 
+const SENDING = {};   // row_id → true：发送中的按钮，重渲后仍置灰（防重复点击）
+
 async function loadConfirmations() {
   try {
     const r = await (await authedFetch(API + '/bridge/confirmations')).json();
@@ -230,23 +272,37 @@ async function loadConfirmations() {
     box.classList.add('show');
     document.getElementById('confirmInner').innerHTML =
       '<b>系统已帮您填好 ' + items.length + ' 条回复，请确认后发送：</b>' +
-      items.map(it => `<div class="confirm-item">
+      items.map(it => {
+        const rid = it.id || '';
+        const sending = !!SENDING[rid];
+        return `<div class="confirm-item">
         <div class="txt">${esc((it.reply_text||'').slice(0,40))}</div>
-        <button class="confirm-btn" onclick="confirmSend('${it.problem_id}', '${it.id||''}', this)">确认发送</button>
-      </div>`).join('');
+        <button class="confirm-btn" ${sending?'disabled':''}
+          onclick="confirmSend('${esc(it.problem_id)}', '${esc(rid)}', this)">${sending?'发送中…':'确认发送'}</button>
+      </div>`;
+      }).join('');
   } catch (e) { /* 静默 */ }
 }
 
 async function confirmSend(pid, rowId, btn) {
   btn.disabled = true; btn.textContent = '发送中…';
+  if (rowId) SENDING[rowId] = true;
   try {
     const r = await (await authedFetch(API + '/bridge/confirm', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({problem_id: pid, row_id: rowId || null})
     })).json();
     if (r.ok) { toast('已确认，系统正在发送'); loadConfirmations(); }
-    else { toast('失败：' + (r.note||'')); btn.disabled = false; }
-  } catch (e) { toast('错误：' + e.message); btn.disabled = false; }
+    else {
+      toast('失败：' + (r.note||''));
+      btn.disabled = false; btn.textContent = '确认发送';
+      if (rowId) delete SENDING[rowId];
+    }
+  } catch (e) {
+    toast('错误：' + e.message);
+    btn.disabled = false; btn.textContent = '确认发送';
+    if (rowId) delete SENDING[rowId];
+  }
 }
 
 async function loadRetrospect() {
@@ -262,15 +318,17 @@ async function loadRetrospect() {
   } catch (e) { /* 静默 */ }
 }
 
-setInterval(() => loadList(false), 300000);
-if (!requireCode()) {
+(async () => {
+  await detectMode();
+  if (requireCode()) return;   // 拿到访问码前不注册轮询（否则无码时 5 分钟后又在错误页上触发）
   refreshAuto();
   loadList(false);
   loadConfirmations();
   loadRetrospect();
   loadBreaker();
   setInterval(loadConfirmations, 60000);
-}
+  setInterval(() => loadList(false), 300000);
+})();
 </script>
 </body>
 </html>

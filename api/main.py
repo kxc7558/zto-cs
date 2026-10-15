@@ -28,6 +28,18 @@ from shared.config import DB_PATH
 _state: dict = {"reader": None, "cache": None, "cache_ts": None}
 
 
+def _is_session_expired(e: Exception) -> bool:
+    """会话失效判定（异常类型 + 中文文案双保险）。"""
+    from service.problem_reader import SessionExpired
+    return isinstance(e, SessionExpired) or "会话失效" in str(e)
+
+
+def _session_expired_breaker() -> None:
+    """会话失效：记一次（触发止损），供端点抛 440。"""
+    from service.breaker import record_captcha
+    record_captcha()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _state["reader"] = problem_reader
@@ -115,25 +127,42 @@ async def list_problem_parcels(force: bool = False,
     cached = _state.get("cache")
     if cached is not None and not force and (now - (_state.get("cache_ts") or 0)) < 300:
         return cached
-    # 优先：bridge_cache（历史/兜底数据源）
-    from service.bridge_cache import get_latest_parcels
-    parcels = get_latest_parcels()
-    if parcels:
-        payload = json.loads(PParcelList(items=parcels, total=len(parcels),
-                             scanned_at=datetime.now()).model_dump_json())
+    # 单飞（single-flight）：冷缓存/过期后 N 个并发只打一次真实中通查询（反风控）
+    lock = _state.setdefault("fetch_lock", asyncio.Lock())
+    async with lock:
+        now = datetime.now().timestamp()
+        cached = _state.get("cache")
+        if cached is not None and not force and (now - (_state.get("cache_ts") or 0)) < 300:
+            return cached
+        # 主数据源：CDP reader（需调试 Chrome 在 9222）
+        try:
+            result = await problem_reader.fetch_problem_list()
+        except Exception as e:
+            if _is_session_expired(e):
+                _session_expired_breaker()
+                raise HTTPException(status_code=440,
+                    detail="中通登录已过期——请双击 启动浏览器.bat 重新登录中通")
+            # 兜底（booter）：CDP 不可用时退回 bridge_cache（最近一次成功抓取的快照，TTL 内）
+            from service.bridge_cache import get_latest_parcels
+            fallback = get_latest_parcels()
+            if fallback:
+                payload = json.loads(PParcelList(items=fallback, total=len(fallback),
+                                     scanned_at=datetime.now()).model_dump_json())
+                _state["cache"] = payload
+                _state["cache_ts"] = now
+                return payload
+            raise HTTPException(status_code=502,
+                detail="no data: CDP reader unavailable (login the ZTO problemQuery page first)")
+        payload = json.loads(result.model_dump_json())
         _state["cache"] = payload
         _state["cache_ts"] = now
+        # 落 bridge_cache：供只读端兜底与跨进程取数（否则该兜底分支永远是死代码）
+        try:
+            from service.bridge_cache import save_parcels
+            save_parcels([i.model_dump() for i in result.items])
+        except Exception:
+            pass
         return payload
-    # 主数据源：CDP reader（需调试 Chrome 在 9222）
-    try:
-        result = await problem_reader.fetch_problem_list()
-    except Exception as e:
-        raise HTTPException(status_code=502,
-            detail="no data: CDP reader unavailable (login the ZTO problemQuery page first)")
-    payload = json.loads(result.model_dump_json())
-    _state["cache"] = payload
-    _state["cache_ts"] = now
-    return payload
 
 
 @app.get("/problem-parcels/{problem_id}")
@@ -189,8 +218,14 @@ async def run_auto_reply_once(max_n: int = 5,
     """手动触发一轮自动回复（总开关开着才跑；限流 max_n 条）。"""
     _auth(x_bridge_token)
     try:
-        return await auto_reply.run_auto_reply(max_n=max_n)
+        return await asyncio.wait_for(auto_reply.run_auto_reply(max_n=max_n), timeout=600)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="auto reply timed out")
     except Exception as e:
+        if _is_session_expired(e):
+            _session_expired_breaker()
+            raise HTTPException(status_code=440,
+                detail="中通登录已过期——请双击 启动浏览器.bat 重新登录中通")
         raise HTTPException(status_code=502, detail=f"auto reply failed: {e}")
 
 
@@ -295,13 +330,19 @@ class BridgeConfirm(BaseModel):
 
 @app.post("/bridge/confirm")
 async def bridge_confirm(body: BridgeConfirm, x_bridge_token: str | None = Header(default=None)):
-    """工作台确认发送：认领具体行 → committing，后台 CDP 提交（前端轮询账本状态）。"""
+    """工作台确认发送：认领具体行 → committing，后台 CDP 提交（前端轮询账本状态）。
+
+    认领是同步原子操作（快）：认领成功才派后台任务，并把真实结果回传；
+    认领失败（已被别人认领/无该行/多行需指定 row_id）如实回 {ok:false}，不再一律 200 假成功。
+    """
     _auth(x_bridge_token)
-    from service.bridge import confirm_and_dispatch
-    # CDP 提交是长任务（可能 30s+）——后台执行，HTTP 立即返回（前端轮询账本状态）
+    from service.bridge import claim_row, dispatch_row
     import asyncio
-    task = asyncio.create_task(
-        confirm_and_dispatch(body.problem_id, confirmed_by="human:workbench", row_id=body.row_id))
+    claim = claim_row(body.problem_id, confirmed_by="human:workbench", row_id=body.row_id)
+    if not claim.get("ok"):
+        return {"ok": False, "note": claim.get("note")}
+    # CDP 提交是长任务（可能 30s+）——后台执行，HTTP 立即返回（前端轮询账本状态）
+    task = asyncio.create_task(dispatch_row(claim))
     _state.setdefault("bg_tasks", []).append(task)  # 持引用防 GC
 
     def _done(t):
@@ -315,7 +356,8 @@ async def bridge_confirm(body: BridgeConfirm, x_bridge_token: str | None = Heade
             _state["bg_tasks"].remove(t)
 
     task.add_done_callback(_done)
-    return {"ok": True, "note": "submitting in background — 刷新列表查看结果"}
+    return {"ok": True, "row_id": claim["rid"],
+            "note": "submitting in background — 刷新列表查看结果"}
 
 
 @app.get("/bridge/history")
