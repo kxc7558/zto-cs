@@ -6,3 +6,4 @@ pynacl
 playwright
 pytest
 pytest-asyncio
+pywebview
