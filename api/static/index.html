@@ -75,6 +75,14 @@
     <div class="label" id="bigLabel">还没回的问题件</div>
   </div>
 
+  <div class="ai-check" id="updateBar" style="display:none">
+    <div class="box" style="background:#e8f3ff;border-color:#b4d4ff;color:#1d4ed8">
+      <b>新版本可用（<span id="updVer"></span>）</b> ——
+      <button class="confirm-btn" id="updBtn" onclick="applyUpdate()">立即更新</button>
+      <span id="updStatus" style="margin-left:8px"></span>
+    </div>
+  </div>
+
   <div class="ai-check" id="sessionExpired" style="display:none">
     <div class="box" style="background:#ffece8;border-color:#fda4a4;color:#a41010">
       <b>中通登录已过期</b> —— 请双击「启动浏览器.bat」重新登录中通（安盾/微信扫码），登录后点"刷新"。
@@ -303,6 +311,26 @@ async function confirmSend(pid, rowId, btn) {
     btn.disabled = false; btn.textContent = '确认发送';
     if (rowId) delete SENDING[rowId];
   }
+}
+
+async function checkUpdate() {
+  try {
+    const r = await (await authedFetch(API + '/update/check')).json();
+    if (r.has_update) {
+      document.getElementById('updateBar').classList.add('show');
+      document.getElementById('updVer').textContent = r.server;
+    }
+  } catch (e) { /* 静默 */ }
+}
+
+async function applyUpdate() {
+  const btn = document.getElementById('updBtn');
+  btn.disabled = true;
+  document.getElementById('updStatus').textContent = '更新中…约 1 分钟，完成后请重启服务（双击桌面「问题件助手」）';
+  try {
+    await (await authedFetch(API + '/update/apply', {method:'POST'})).json();
+    toast('更新包已下载，请稍后重启服务生效');
+  } catch (e) { toast('更新失败：' + e.message); }
 }
 
 async function loadRetrospect() {

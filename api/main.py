@@ -408,6 +408,27 @@ async def retrospect_latest(x_bridge_token: str | None = Header(default=None)):
     return latest_retrospect()
 
 
+@app.get("/update/check")
+async def update_check():
+    """检查新版本（软件内更新提示）。返回 {has_update, server, current}。"""
+    from service.updater import check_version, _current_version
+    m = check_version()
+    current = _current_version()
+    if m is None:
+        return {"has_update": False, "current": current, "note": "update server unreachable"}
+    return {"has_update": m.get("version") != current, "server": m.get("version"), "current": current}
+
+
+@app.post("/update/apply")
+async def update_apply():
+    """手动触发更新（工作台"立即更新"按钮）。后台执行，HTTP 立即返回。"""
+    import asyncio
+    from service.updater import poll_and_apply
+    task = asyncio.create_task(asyncio.to_thread(poll_and_apply))
+    _state.setdefault("bg_tasks", []).append(task)
+    return {"ok": True, "note": "更新中，约 1 分钟后自动重启生效（或手动重启服务）"}
+
+
 @app.get("/metrics/hours")
 async def metrics_hours(x_bridge_token: str | None = Header(default=None)):
     """工时基线汇总（Q9：为减员承诺定量）。"""
